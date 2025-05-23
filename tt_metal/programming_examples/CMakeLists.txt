@@ -7,6 +7,7 @@ set(PROGRAMMING_EXAMPLES_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/eltwise_binary/eltwise_binary.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/eltwise_sfpu/eltwise_sfpu.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/hello_world_compute_kernel/hello_world_compute_kernel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/hello_world_compute_kernel_iaroslav/hello_world_compute_kernel_iaroslav.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/hello_world_datamovement_kernel/hello_world_datamovement_kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/hello_world_datatypes_kernel/hello_world_datatypes_kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/loopback/loopback.cpp
@@ -54,6 +55,30 @@ install(
 install(
     DIRECTORY
         hello_world_compute_kernel
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/tenstorrent/kernels"
+    COMPONENT metalium-examples
+    FILES_MATCHING
+    REGEX
+    "/kernels/"
+)
+
+install(
+    DIRECTORY
+        hello_world_compute_kernel_iaroslav
+    # DESTINATION ${CMAKE_INSTALL_DOCDIR}/examples
+    # FIXME(afuller): Something funky is happening when installing files into /usr/share/doc on a default Docker image.
+    #                 Speculation: some dependency for magic doc handling is missing.
+    #                 For now keep it out of 'doc'.
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/tt-metalium/examples"
+    COMPONENT metalium-examples
+    REGEX
+    "/kernels/"
+        EXCLUDE
+)
+
+install(
+    DIRECTORY
+        hello_world_compute_kernel_iaroslav
     DESTINATION "${CMAKE_INSTALL_DATADIR}/tenstorrent/kernels"
     COMPONENT metalium-examples
     FILES_MATCHING
