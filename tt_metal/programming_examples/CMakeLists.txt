@@ -29,12 +29,14 @@ CREATE_PGM_EXAMPLES_EXE("${PROGRAMMING_EXAMPLES_SRCS}" "") # no subdir, output b
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/profiler)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/contributed)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/distributed)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/hdl_simulation)
 
 add_custom_target(
     programming_examples
     DEPENDS
         profiler_examples
         contributed
+        hdl_simulation_examples
         ${PROGRAMMING_EXAMPLES_TEST_TARGETS}
 )
 
