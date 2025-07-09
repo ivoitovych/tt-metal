@@ -22,91 +22,148 @@ int main() {
     constexpr CoreCoord core = {0, 0};
 
     // Create buffers for host-device communication
-    constexpr uint32_t num_values = 1024;  // 1K values
+    constexpr uint32_t num_commands = 256;  // Number of simulation commands
+    constexpr uint32_t values_per_cmd = 4;  // [cmd, addr, data, reserved]
+    constexpr uint32_t num_values = num_commands * values_per_cmd;
     constexpr uint32_t value_size = sizeof(uint32_t);
     constexpr uint32_t buffer_size = num_values * value_size;
 
-    // Input buffer - simulation commands/data from host
+    // Input buffer - simulation commands from host
     tt_metal::InterleavedBufferConfig input_config{
-        .device = device, .size = buffer_size, .page_size = buffer_size, .buffer_type = tt_metal::BufferType::DRAM};
+        .device = device, .size = buffer_size, .page_size = 4096, .buffer_type = tt_metal::BufferType::DRAM};
     auto input_buffer = CreateBuffer(input_config);
 
     // Output buffer - simulation results to host
-    auto output_buffer = CreateBuffer(input_config);
+    tt_metal::InterleavedBufferConfig output_config{
+        .device = device, .size = buffer_size, .page_size = 4096, .buffer_type = tt_metal::BufferType::DRAM};
+    auto output_buffer = CreateBuffer(output_config);
 
-    // Create circular buffer for data movement
-    uint32_t cb_index = CBIndex::c_0;
-    CircularBufferConfig cb_config =
-        CircularBufferConfig(buffer_size, {{cb_index, tt::DataFormat::UInt32}}).set_page_size(cb_index, value_size);
-    auto cb_data = CreateCircularBuffer(program, core, cb_config);
+    // Create unified dataflow + simulation kernel
+    // This kernel will read from host, simulate HDL, and write results back
+    std::vector<uint32_t> kernel_compile_args = {
+        (uint32_t)(input_buffer->buffer_type() == BufferType::DRAM), num_commands};
 
-    // Create reader kernel
-    std::vector<uint32_t> reader_compile_args = {(uint32_t)(input_buffer->buffer_type() == BufferType::DRAM)};
-
-    KernelHandle reader_kernel = CreateKernel(
+    KernelHandle hdl_simulation_kernel = CreateKernel(
         program,
-        "tt_metal/programming_examples/hdl_simulation/host_comm_simulation/kernels/reader_kernel.cpp",
+        "tt_metal/programming_examples/hdl_simulation/host_comm_simulation/kernels/hdl_dataflow_simulation.cpp",
         core,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
-            .compile_args = reader_compile_args});
-
-    // Create compute kernel for simulation
-    KernelHandle compute_kernel = CreateKernel(
-        program,
-        "tt_metal/programming_examples/hdl_simulation/host_comm_simulation/kernels/simulation_compute.cpp",
-        core,
-        ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .compile_args = {num_values}});
+            .compile_args = kernel_compile_args});
 
     // Prepare simulation input data
     std::vector<uint32_t> input_data(num_values);
 
-    // Example: Create a simple HDL test pattern
-    // Format: [command, address, data, expected_result, ...]
-    for (uint32_t i = 0; i < num_values; i += 4) {
-        input_data[i] = i / 4;               // Command ID
-        input_data[i + 1] = i * 16;          // Address
-        input_data[i + 2] = 0xDEADBEEF + i;  // Write data
-        input_data[i + 3] = 0;               // Reserved/expected
+    // Create diverse HDL test commands to demonstrate communication
+    for (uint32_t i = 0; i < num_commands; i++) {
+        uint32_t base_idx = i * 4;
+
+        // Create different command types for interesting simulation
+        uint32_t cmd_type = i % 8;                          // 8 different command types
+        uint32_t addr = i * 4;                              // Word-aligned addresses
+        uint32_t data = 0x1000 + (i * 0x100) + (i & 0xFF);  // Varying data patterns
+
+        input_data[base_idx + 0] = cmd_type;
+        input_data[base_idx + 1] = addr;
+        input_data[base_idx + 2] = data;
+        input_data[base_idx + 3] = 0xABCD0000 + i;  // Sequence marker
     }
 
-    // Write input data
+    // Write input commands to device
+    printf("Writing %u simulation commands to device...\n", num_commands);
     EnqueueWriteBuffer(cq, input_buffer, input_data, false);
 
-    // Set runtime args
+    // Set runtime arguments
     SetRuntimeArgs(
         program,
-        reader_kernel,
+        hdl_simulation_kernel,
         core,
         {input_buffer->address(),
          output_buffer->address(),
-         0,  // start_addr
-         num_values});
+         0,  // start_idx
+         num_commands});
 
-    SetRuntimeArgs(program, compute_kernel, core, {});
-
-    // Run simulation
-    printf("Starting HDL simulation with host communication...\n");
-    printf("Processing %u commands\n", num_values / 4);
+    // Run HDL simulation with host communication
+    printf("Starting HDL simulation with host-to-kernel communication...\n");
+    printf("Each command will be read from host memory, processed, and results written back\n");
 
     EnqueueProgram(cq, program, false);
 
-    // Read results
+    // Read simulation results back from device
     std::vector<uint32_t> output_data(num_values);
     EnqueueReadBuffer(cq, output_buffer, output_data, true);
 
-    // Print some results
-    printf("\nSimulation Results (first 10 entries):\n");
-    printf("Cmd# | Status | Address | Data\n");
-    printf("-----|--------|---------|----------\n");
+    printf("HDL simulation completed!\n\n");
 
-    for (uint32_t i = 0; i < std::min(40u, num_values); i += 4) {
-        printf("%4u | %6u | %7x | %08x\n", i / 4, output_data[i], output_data[i + 1], output_data[i + 2]);
+    // Analyze and display results to show the communication worked
+    printf("Host-to-Kernel Communication Results:\n");
+    printf("=====================================\n");
+    printf("Cmd# | Input Cmd | Input Addr | Input Data | Result Status | Result Data | Sequence\n");
+    printf("-----|-----------|------------|------------|---------------|-------------|----------\n");
+
+    uint32_t successful_commands = 0;
+    for (uint32_t i = 0; i < std::min(20u, num_commands); i++) {
+        uint32_t in_base = i * 4;
+        uint32_t out_base = i * 4;
+
+        uint32_t input_cmd = input_data[in_base + 0];
+        uint32_t input_addr = input_data[in_base + 1];
+        uint32_t input_data_val = input_data[in_base + 2];
+        uint32_t input_seq = input_data[in_base + 3];
+
+        uint32_t result_status = output_data[out_base + 0];
+        uint32_t result_addr = output_data[out_base + 1];
+        uint32_t result_data = output_data[out_base + 2];
+        uint32_t result_seq = output_data[out_base + 3];
+
+        printf(
+            "%4u | %9u | 0x%08x | 0x%08x | %13u | 0x%08x | %08x\n",
+            i,
+            input_cmd,
+            input_addr,
+            input_data_val,
+            result_status,
+            result_data,
+            result_seq);
+
+        if (result_status == 1) {
+            successful_commands++;
+        }
+    }
+
+    if (num_commands > 20) {
+        printf("... (showing first 20 of %u commands)\n", num_commands);
+    }
+
+    printf("\nCommunication Summary:\n");
+    printf("- Commands sent to device: %u\n", num_commands);
+    printf("- Commands processed successfully: %u\n", successful_commands);
+    printf("- Total data transferred: %u bytes input + %u bytes output\n", buffer_size, buffer_size);
+
+    // Verify communication integrity by checking sequence markers
+    bool communication_verified = true;
+    for (uint32_t i = 0; i < num_commands; i++) {
+        uint32_t expected_seq = 0xABCD0000 + i;
+        uint32_t actual_seq = output_data[i * 4 + 3];
+        if (actual_seq != expected_seq) {
+            communication_verified = false;
+            break;
+        }
+    }
+
+    printf("- Communication integrity: %s\n", communication_verified ? "VERIFIED ✓" : "FAILED ✗");
+
+    if (communication_verified) {
+        printf("\n✓ SUCCESS: Host-to-kernel communication working correctly!\n");
+        printf("  The device successfully read commands from host memory,\n");
+        printf("  processed them through HDL simulation, and wrote results back.\n");
+    } else {
+        printf("\n✗ FAILURE: Communication integrity check failed!\n");
     }
 
     // Cleanup
     CloseDevice(device);
 
-    return 0;
+    return communication_verified ? 0 : 1;
 }
