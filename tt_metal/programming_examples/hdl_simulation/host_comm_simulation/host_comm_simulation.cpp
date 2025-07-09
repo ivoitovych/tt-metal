@@ -88,7 +88,7 @@ int main() {
 
     // Run simulation
     printf("Starting HDL simulation with host communication...\n");
-    printf("Processing %d commands\n", num_values / 4);
+    printf("Processing %u commands\n", num_values / 4);
 
     EnqueueProgram(cq, program, false);
 
@@ -102,7 +102,7 @@ int main() {
     printf("-----|--------|---------|----------\n");
 
     for (uint32_t i = 0; i < std::min(40u, num_values); i += 4) {
-        printf("%4d | %6d | %7x | %08x\n", i / 4, output_data[i], output_data[i + 1], output_data[i + 2]);
+        printf("%4u | %6u | %7x | %08x\n", i / 4, output_data[i], output_data[i + 1], output_data[i + 2]);
     }
 
     // Cleanup

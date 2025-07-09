@@ -40,7 +40,7 @@ int main() {
     // Run the simulation
     EnqueueProgram(cq, program, false);
 
-    printf("HDL Simulation started on Core {%d, %d}...\n", core.x, core.y);
+    printf("HDL Simulation started on Core {%zu, %zu}...\n", core.x, core.y);
     printf("Check DPRINT output for simulation results (export TT_METAL_DPRINT_CORES=0,0)\n");
 
     // Wait for completion
