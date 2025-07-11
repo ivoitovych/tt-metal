@@ -6,7 +6,7 @@
 #include "dataflow_api.h"
 #include "debug/dprint.h"
 
-// HDL Module Simulation State (in dataflow kernel)
+// HDL Module Simulation State
 struct HDLSimulationState {
     uint32_t memory[256];    // Simulated memory array
     uint32_t registers[32];  // Simulated registers
@@ -15,7 +15,6 @@ struct HDLSimulationState {
 
     // Constructor
     HDLSimulationState() {
-        // Initialize memory and registers
         for (int i = 0; i < 256; i++) {
             memory[i] = 0;
         }
@@ -33,7 +32,7 @@ uint32_t simulate_memory_read(HDLSimulationState& state, uint32_t addr) {
     if (word_addr < 256) {
         return state.memory[word_addr];
     }
-    return 0xDEADDEAD;  // Error value
+    return 0xDEADDEAD;
 }
 
 void simulate_memory_write(HDLSimulationState& state, uint32_t addr, uint32_t data) {
@@ -52,7 +51,7 @@ uint32_t simulate_register_access(HDLSimulationState& state, uint32_t reg_num, u
             return state.registers[reg_num];
         }
     }
-    return 0xBADDEAD;  // Error value
+    return 0xBADDEAD;
 }
 
 // Main HDL simulation logic
@@ -67,7 +66,7 @@ uint32_t process_hdl_command(HDLSimulationState& state, uint32_t cmd, uint32_t a
         case 0:  // Memory Write
             simulate_memory_write(state, addr, data);
             result = data;
-            state.status_reg = 1;  // Success
+            state.status_reg = 1;
             break;
 
         case 1:  // Memory Read
@@ -125,7 +124,7 @@ uint32_t process_hdl_command(HDLSimulationState& state, uint32_t cmd, uint32_t a
 
             for (uint32_t i = 0; i < count && (start_addr + i) < 256; i++) {
                 checksum ^= state.memory[start_addr + i];
-                checksum = (checksum << 1) | (checksum >> 31);  // Rotate left
+                checksum = (checksum << 1) | (checksum >> 31);
             }
             result = checksum;
             state.status_reg = 1;
@@ -133,7 +132,7 @@ uint32_t process_hdl_command(HDLSimulationState& state, uint32_t cmd, uint32_t a
 
         default:
             result = 0xBADC0DE;
-            state.status_reg = 0xFF;  // Error
+            state.status_reg = 0xFF;
             break;
     }
 
@@ -144,44 +143,67 @@ void kernel_main() {
     // Get runtime arguments
     uint32_t src_addr = get_arg_val<uint32_t>(0);      // Input buffer address
     uint32_t dst_addr = get_arg_val<uint32_t>(1);      // Output buffer address
-    uint32_t start_idx = get_arg_val<uint32_t>(2);     // Starting index
+    uint32_t start_idx = get_arg_val<uint32_t>(2);     // Starting index (word offset)
     uint32_t num_commands = get_arg_val<uint32_t>(3);  // Number of commands
 
     // Get compile-time arguments
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t max_commands = get_compile_time_arg_val(1);
+    constexpr uint32_t page_size = get_compile_time_arg_val(2);
 
     // Initialize HDL simulation state
     HDLSimulationState hdl_state;
 
-    DPRINT << "HDL Dataflow Simulation Started" << ENDL();
+    DPRINT << "HDL Dataflow Simulation Started (FINAL FIX)" << ENDL();
     DPRINT << "src_addr=" << HEX() << src_addr << " dst_addr=" << dst_addr << DEC() << ENDL();
-    DPRINT << "Processing " << num_commands << " commands with host communication" << ENDL();
+    DPRINT << "page_size=" << page_size << " num_commands=" << num_commands << ENDL();
+    DPRINT << "Using large page addressing for contiguous access" << ENDL();
 
-    // Use simple addressing - let's try to process commands directly
-    // Since we know the data layout, let's simulate the correct command processing
+    // FINAL FIX: Use direct byte addressing within the large page
+    // Since page_size = buffer_size, we can address directly as byte offsets
     for (uint32_t cmd_idx = 0; cmd_idx < num_commands; cmd_idx++) {
-        // For now, let's simulate the expected command pattern
-        // This demonstrates the HDL simulation logic working
-        uint32_t cmd = cmd_idx % 8;                                     // Expected command pattern
-        uint32_t addr = cmd_idx * 4;                                    // Expected address pattern
-        uint32_t data = 0x1000 + (cmd_idx * 0x100) + (cmd_idx & 0xFF);  // Expected data
-        uint32_t sequence = 0xABCD0000 + cmd_idx;                       // Expected sequence
+        // Calculate byte offset for this command (4 words * 4 bytes each = 16 bytes per command)
+        uint32_t cmd_byte_offset = cmd_idx * 16;
+
+        // Read command directly from buffer using byte addressing
+        uint32_t cmd_data[4];
+
+        // Read the entire command in one NOC operation (16 bytes)
+        noc_async_read(src_addr + cmd_byte_offset, reinterpret_cast<uint32_t>(&cmd_data[0]),
+                       16);  // 4 words = 16 bytes
+        noc_async_read_barrier();
+
+        // Extract command components
+        uint32_t cmd = cmd_data[0];
+        uint32_t addr = cmd_data[1];
+        uint32_t data = cmd_data[2];
+        uint32_t sequence = cmd_data[3];
 
         // Process HDL command through simulation
         uint32_t result_data = process_hdl_command(hdl_state, cmd, addr, data);
 
+        // Prepare result packet
+        uint32_t result[4];
+        result[0] = hdl_state.status_reg;  // Status
+        result[1] = addr;                  // Address (echo)
+        result[2] = result_data;           // Result data
+        result[3] = sequence;              // Sequence (echo for verification)
+
+        // Write result back using direct byte addressing
+        noc_async_write(reinterpret_cast<uint32_t>(&result[0]), dst_addr + cmd_byte_offset,
+                        16);  // 4 words = 16 bytes
+        noc_async_write_barrier();
+
         // Debug output for first few commands
         if (cmd_idx < 10) {
-            DPRINT << "Cmd " << cmd_idx << ": SIMULATED op=" << (cmd & 0xFF) << " addr=" << HEX() << addr
-                   << " data=" << data << " -> result=" << result_data << " status=" << DEC() << hdl_state.status_reg
-                   << " seq=" << HEX() << sequence << DEC() << ENDL();
+            DPRINT << "Cmd " << cmd_idx << ": READ op=" << (cmd & 0xFF) << " addr=" << HEX() << addr << " data=" << data
+                   << " seq=" << sequence << " -> result=" << result_data << " status=" << DEC() << hdl_state.status_reg
+                   << ENDL();
         }
     }
 
     DPRINT << "HDL Simulation complete!" << ENDL();
-    DPRINT << "Processed " << num_commands << " commands" << ENDL();
+    DPRINT << "Successfully processed " << num_commands << " commands" << ENDL();
     DPRINT << "Total simulation cycles: " << hdl_state.cycle_count << ENDL();
-    DPRINT << "Status: This version simulates HDL logic without host communication" << ENDL();
-    DPRINT << "Communication issues prevented reading real host data" << ENDL();
+    DPRINT << "Real host communication: " << (num_commands * 8) << " words transferred" << ENDL();
 }
