@@ -1,0 +1,39 @@
+// kernels/simple_communication_compute.cpp
+#include <cstdint>
+#include "compute_kernel_api/common.h"
+#include "compute_kernel_api/tile_move_copy.h"
+
+namespace NAMESPACE {
+void MAIN {
+    constexpr uint32_t cb_in = tt::CBIndex::c_0;
+    constexpr uint32_t cb_out = tt::CBIndex::c_16;
+
+    // Initialize tile operations
+    init_sfpu(cb_in);
+
+    // The compute kernel runs in an infinite loop
+    // The dataflow kernels control when to stop by not sending more data
+    while (1) {
+        // Wait for input data
+        cb_wait_front(cb_in, 1);
+
+        // Reserve space for output
+        cb_reserve_back(cb_out, 1);
+
+        // Process the tile
+        acquire_dst(tt::DstMode::Half);
+
+        // Copy input tile to DST
+        copy_tile(cb_in, 0, 0);
+
+        // Pack the tile to output
+        pack_tile(0, cb_out);
+
+        release_dst(tt::DstMode::Half);
+
+        // Pop input and push output
+        cb_pop_front(cb_in, 1);
+        cb_push_back(cb_out, 1);
+    }
+}
+}  // namespace NAMESPACE

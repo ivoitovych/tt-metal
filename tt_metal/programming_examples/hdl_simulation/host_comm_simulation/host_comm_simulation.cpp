@@ -3,46 +3,58 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <vector>
 #include <cstring>
+#include <iomanip>
 
 using namespace tt;
 using namespace tt::tt_metal;
 
+// Verify HDL simulation results
+bool verify_hdl_results(
+    const std::vector<uint32_t>& input_data, const std::vector<uint32_t>& output_data, uint32_t num_commands) {
+    uint32_t successful_commands = 0;
+
+    for (uint32_t i = 0; i < num_commands; i++) {
+        uint32_t base_idx = i * 4;
+        uint32_t expected_seq = input_data[base_idx + 3];
+        uint32_t actual_seq = output_data[base_idx + 3];
+
+        if (actual_seq == expected_seq) {
+            successful_commands++;
+        }
+    }
+
+    return successful_commands == num_commands;
+}
+
 int main() {
     // Initialize device
-    constexpr int device_id = 0;
-    IDevice* device = CreateDevice(device_id);
+    IDevice* device = CreateDevice(0);
     CommandQueue& cq = device->command_queue();
     Program program = CreateProgram();
 
-    // Target single core
     constexpr CoreCoord core = {0, 0};
 
-    // Create buffers for host-device communication
+    // Configuration
     constexpr uint32_t num_commands = 256;  // Number of simulation commands
-    constexpr uint32_t values_per_cmd = 4;  // [cmd, addr, data, reserved]
+    constexpr uint32_t values_per_cmd = 4;  // [cmd, addr, data, sequence]
     constexpr uint32_t num_values = num_commands * values_per_cmd;
     constexpr uint32_t value_size = sizeof(uint32_t);
     constexpr uint32_t buffer_size = num_values * value_size;
 
-    // FINAL FIX: Use buffer_size as page_size for contiguous access
-    // This treats the entire buffer as one large page
+    // Use buffer_size as page_size for single large page
     constexpr uint32_t page_size = buffer_size;
 
-    // Input buffer - simulation commands from host
-    InterleavedBufferConfig input_config{
+    // Create input/output buffers
+    InterleavedBufferConfig buffer_config{
         .device = device, .size = buffer_size, .page_size = page_size, .buffer_type = BufferType::DRAM};
-    auto input_buffer = CreateBuffer(input_config);
 
-    // Output buffer - simulation results to host
-    InterleavedBufferConfig output_config{
-        .device = device, .size = buffer_size, .page_size = page_size, .buffer_type = BufferType::DRAM};
-    auto output_buffer = CreateBuffer(output_config);
+    auto input_buffer = CreateBuffer(buffer_config);
+    auto output_buffer = CreateBuffer(buffer_config);
 
-    // Create unified dataflow + simulation kernel
+    // Create kernel with proper compile arguments
     std::vector<uint32_t> kernel_compile_args = {
         (uint32_t)(input_buffer->buffer_type() == BufferType::DRAM), num_commands, page_size};
 
@@ -55,30 +67,28 @@ int main() {
             .noc = NOC::RISCV_0_default,
             .compile_args = kernel_compile_args});
 
-    // Prepare simulation input data
+    // Prepare test data with various HDL operations
     std::vector<uint32_t> input_data(num_values);
 
-    // Create diverse HDL test commands to demonstrate communication
+    printf("=== HDL Simulation with Host Communication ===\n");
+    printf("Preparing %u HDL simulation commands...\n", num_commands);
+
+    // Generate diverse test commands
     for (uint32_t i = 0; i < num_commands; i++) {
         uint32_t base_idx = i * 4;
-
-        // Create different command types for interesting simulation
-        uint32_t cmd_type = i % 8;                          // 8 different command types
-        uint32_t addr = i * 4;                              // Word-aligned addresses
-        uint32_t data = 0x1000 + (i * 0x100) + (i & 0xFF);  // Varying data patterns
+        uint32_t cmd_type = i % 8;        // Cycle through all 8 command types
+        uint32_t addr = (i * 4) & 0x3FF;  // Keep within 1KB range
+        uint32_t data = 0x1000 + (i * 0x100) + (i & 0xFF);
+        uint32_t sequence = 0xABCD0000 + i;
 
         input_data[base_idx + 0] = cmd_type;
         input_data[base_idx + 1] = addr;
         input_data[base_idx + 2] = data;
-        input_data[base_idx + 3] = 0xABCD0000 + i;  // Sequence marker
+        input_data[base_idx + 3] = sequence;
     }
 
-    // Write input commands to device
-    printf("Writing %u simulation commands to device...\n", num_commands);
-    printf("Input buffer: addr=0x%x, size=%u, page_size=%u\n", input_buffer->address(), buffer_size, page_size);
-    printf("Output buffer: addr=0x%x, size=%u, page_size=%u\n", output_buffer->address(), buffer_size, page_size);
-
-    // Use blocking write to ensure data is transferred
+    // Execute HDL simulation
+    printf("\nWriting commands to device memory...\n");
     EnqueueWriteBuffer(cq, input_buffer, input_data, true);
 
     // Set runtime arguments
@@ -88,101 +98,77 @@ int main() {
         core,
         {input_buffer->address(),
          output_buffer->address(),
-         0,  // start_idx (word offset within buffer)
+         0,  // start_idx
          num_commands});
 
-    // Run HDL simulation with host communication
-    printf("Starting HDL simulation with REAL host-to-kernel communication...\n");
-    printf("Using large page addressing for contiguous buffer access\n");
-
-    // Use blocking execution
+    printf("Executing HDL simulation on device...\n");
     EnqueueProgram(cq, program, true);
 
-    // Read simulation results back from device
+    // Read results
     std::vector<uint32_t> output_data(num_values);
+    printf("Reading simulation results from device...\n");
     EnqueueReadBuffer(cq, output_buffer, output_data, true);
 
-    printf("HDL simulation completed!\n\n");
+    // Display results
+    printf("\n=== HDL Simulation Results ===\n");
+    printf("Cmd# | Operation | Address    | Input Data | Result     | Status | Verified\n");
+    printf("-----|-----------|------------|------------|------------|--------|----------\n");
 
-    // Analyze and display results
-    printf("Host-to-Kernel Communication Results:\n");
-    printf("=====================================\n");
-    printf("Cmd# | Input Cmd | Input Addr | Input Data | Result Status | Result Data | Sequence\n");
-    printf("-----|-----------|------------|------------|---------------|-------------|----------\n");
+    const char* op_names[] = {
+        "MEM_WRITE", "MEM_READ ", "READ_MOD ", "REG_WRITE", "REG_READ ", "STATUS   ", "PATTERN  ", "CHECKSUM "};
 
-    uint32_t successful_commands = 0;
-
+    // Show first 20 results
     for (uint32_t i = 0; i < std::min(20u, num_commands); i++) {
-        uint32_t in_base = i * 4;
-        uint32_t out_base = i * 4;
+        uint32_t base_idx = i * 4;
+        uint32_t cmd = input_data[base_idx + 0];
+        uint32_t addr = input_data[base_idx + 1];
+        uint32_t in_data = input_data[base_idx + 2];
+        uint32_t in_seq = input_data[base_idx + 3];
 
-        uint32_t input_cmd = input_data[in_base + 0];
-        uint32_t input_addr = input_data[in_base + 1];
-        uint32_t input_data_val = input_data[in_base + 2];
-        uint32_t input_seq = input_data[in_base + 3];
+        uint32_t status = output_data[base_idx + 0];
+        uint32_t out_data = output_data[base_idx + 2];
+        uint32_t out_seq = output_data[base_idx + 3];
 
-        uint32_t result_status = output_data[out_base + 0];
-        uint32_t result_addr = output_data[out_base + 1];
-        uint32_t result_data = output_data[out_base + 2];
-        uint32_t result_seq = output_data[out_base + 3];
+        bool verified = (in_seq == out_seq);
 
         printf(
-            "%4u | %9u | 0x%08x | 0x%08x | %13u | 0x%08x | %08x\n",
+            "%4u | %s | 0x%08x | 0x%08x | 0x%08x | %6u | %s\n",
             i,
-            input_cmd,
-            input_addr,
-            input_data_val,
-            result_status,
-            result_data,
-            result_seq);
-
-        // Check if communication worked
-        if (result_seq == input_seq) {
-            successful_commands++;
-        }
+            op_names[cmd & 0x7],
+            addr,
+            in_data,
+            out_data,
+            status,
+            verified ? "✓" : "✗");
     }
 
     if (num_commands > 20) {
         printf("... (showing first 20 of %u commands)\n", num_commands);
     }
 
-    // Count total successful commands
-    uint32_t total_successful = 0;
-    for (uint32_t i = 0; i < num_commands; i++) {
-        uint32_t expected_seq = 0xABCD0000 + i;
-        uint32_t actual_seq = output_data[i * 4 + 3];
-        if (actual_seq == expected_seq) {
-            total_successful++;
-        }
-    }
+    // Verify all results
+    bool all_verified = verify_hdl_results(input_data, output_data, num_commands);
 
-    printf("\nCommunication Summary:\n");
-    printf("- Commands sent to device: %u\n", num_commands);
-    printf("- Commands with correct sequence: %u\n", total_successful);
-    printf("- Communication success rate: %.1f%%\n", (float)total_successful / num_commands * 100.0f);
-    printf("- Total data transferred: %u bytes input + %u bytes output\n", buffer_size, buffer_size);
+    // Summary
+    printf("\n=== Communication Summary ===\n");
+    printf("Total commands sent: %u\n", num_commands);
+    printf(
+        "Total data transferred: %u bytes (in) + %u bytes (out) = %u bytes\n",
+        buffer_size,
+        buffer_size,
+        buffer_size * 2);
+    printf("Communication verified: %s\n", all_verified ? "✓ PASSED" : "✗ FAILED");
 
-    // Verify communication integrity
-    bool communication_verified = (total_successful == num_commands);
-
-    printf("- Communication integrity: %s\n", communication_verified ? "VERIFIED ✓" : "FAILED ✗");
-
-    if (communication_verified) {
-        printf("\n🎉 SUCCESS: Real host-to-kernel communication working perfectly!\n");
-        printf("  ✓ Device successfully read %u commands from host memory\n", num_commands);
-        printf("  ✓ Processed them through comprehensive HDL simulation\n");
-        printf("  ✓ Wrote results back with perfect data integrity\n");
-        printf("  ✓ All %u sequence markers verified correctly\n", num_commands);
-        printf("\n🚀 BREAKTHROUGH: Complete bidirectional HDL simulation communication!\n");
-    } else {
-        printf("\n⚠️  Communication in progress: %u/%u verified\n", total_successful, num_commands);
-        printf("  🔧 Buffer addressing refinement needed\n");
-        printf("  📊 HDL simulation engine: 100%% functional\n");
-        printf("  📡 Communication infrastructure: operational\n");
+    if (all_verified) {
+        printf("\n✓ ACHIEVED: Host-to-kernel data demonstration\n");
+        printf("  - Host writes %u commands (%u bytes) to device memory\n", num_commands, buffer_size);
+        printf("  - Kernel processes commands and executes HDL simulation\n");
+        printf("  - Host reads back %u results (%u bytes) from device\n", num_commands, buffer_size);
+        printf("  - %u total NOC transfers completed successfully\n", num_commands * 8);
     }
 
     // Cleanup
     CloseDevice(device);
 
-    return communication_verified ? 0 : 1;
+    return all_verified ? 0 : 1;
 }

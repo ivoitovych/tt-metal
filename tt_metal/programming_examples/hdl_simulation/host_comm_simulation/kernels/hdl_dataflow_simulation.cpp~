@@ -13,7 +13,8 @@ struct HDLSimulationState {
     uint32_t status_reg;     // Status register
     uint32_t cycle_count;    // Simulation cycle counter
 
-    void init() {
+    // Constructor
+    HDLSimulationState() {
         for (int i = 0; i < 256; i++) {
             memory[i] = 0;
         }
@@ -152,68 +153,57 @@ void kernel_main() {
 
     // Initialize HDL simulation state
     HDLSimulationState hdl_state;
-    hdl_state.init();
 
-    DPRINT << "HDL Dataflow Simulation Started" << ENDL();
+    DPRINT << "HDL Dataflow Simulation Started (FINAL FIX)" << ENDL();
     DPRINT << "src_addr=" << HEX() << src_addr << " dst_addr=" << dst_addr << DEC() << ENDL();
     DPRINT << "page_size=" << page_size << " num_commands=" << num_commands << ENDL();
+    DPRINT << "Using large page addressing for contiguous access" << ENDL();
 
-    // Create address generators for interleaved buffers
-    const InterleavedAddrGen<src_is_dram> src_gen = {.bank_base_address = src_addr, .page_size = page_size};
-
-    const InterleavedAddrGen<src_is_dram> dst_gen = {.bank_base_address = dst_addr, .page_size = page_size};
-
-    // Since we're using page_size = buffer_size, we have one large page
-    // We'll read the entire buffer in one go
-    uint32_t cmd_buffer[max_commands * 4];
-    uint32_t result_buffer[max_commands * 4];
-
-    // Read all commands at once
-    uint64_t src_noc_addr = get_noc_addr(0, src_gen);
-    noc_async_read(src_noc_addr, (uint32_t)&cmd_buffer[0], num_commands * 16);
-    noc_async_read_barrier();
-
-    DPRINT << "Read " << num_commands << " commands from host" << ENDL();
-
-    // Process each command
+    // FINAL FIX: Use direct byte addressing within the large page
+    // Since page_size = buffer_size, we can address directly as byte offsets
     for (uint32_t cmd_idx = 0; cmd_idx < num_commands; cmd_idx++) {
-        uint32_t base_idx = cmd_idx * 4;
+        // Calculate byte offset for this command (4 words * 4 bytes each = 16 bytes per command)
+        uint32_t cmd_byte_offset = cmd_idx * 16;
+
+        // Read command directly from buffer using byte addressing
+        uint32_t cmd_data[4];
+
+        // Read the entire command in one NOC operation (16 bytes)
+        noc_async_read(src_addr + cmd_byte_offset, reinterpret_cast<uint32_t>(&cmd_data[0]),
+                       16);  // 4 words = 16 bytes
+        noc_async_read_barrier();
 
         // Extract command components
-        uint32_t cmd = cmd_buffer[base_idx + 0];
-        uint32_t addr = cmd_buffer[base_idx + 1];
-        uint32_t data = cmd_buffer[base_idx + 2];
-        uint32_t sequence = cmd_buffer[base_idx + 3];
+        uint32_t cmd = cmd_data[0];
+        uint32_t addr = cmd_data[1];
+        uint32_t data = cmd_data[2];
+        uint32_t sequence = cmd_data[3];
 
         // Process HDL command through simulation
         uint32_t result_data = process_hdl_command(hdl_state, cmd, addr, data);
 
-        // Store results
-        result_buffer[base_idx + 0] = hdl_state.status_reg;  // Status
-        result_buffer[base_idx + 1] = addr;                  // Address (echo)
-        result_buffer[base_idx + 2] = result_data;           // Result data
-        result_buffer[base_idx + 3] = sequence;              // Sequence (echo for verification)
+        // Prepare result packet
+        uint32_t result[4];
+        result[0] = hdl_state.status_reg;  // Status
+        result[1] = addr;                  // Address (echo)
+        result[2] = result_data;           // Result data
+        result[3] = sequence;              // Sequence (echo for verification)
+
+        // Write result back using direct byte addressing
+        noc_async_write(reinterpret_cast<uint32_t>(&result[0]), dst_addr + cmd_byte_offset,
+                        16);  // 4 words = 16 bytes
+        noc_async_write_barrier();
 
         // Debug output for first few commands
         if (cmd_idx < 10) {
-            DPRINT << "Cmd " << cmd_idx << ": SIMULATED op=" << (cmd & 0xFF) << " addr=" << addr << " data=" << data
-                   << " -> result=" << result_data << " status=" << hdl_state.status_reg << ENDL();
+            DPRINT << "Cmd " << cmd_idx << ": READ op=" << (cmd & 0xFF) << " addr=" << HEX() << addr << " data=" << data
+                   << " seq=" << sequence << " -> result=" << result_data << " status=" << DEC() << hdl_state.status_reg
+                   << ENDL();
         }
     }
 
-    // Write all results back at once
-    uint64_t dst_noc_addr = get_noc_addr(0, dst_gen);
-    noc_async_write((uint32_t)&result_buffer[0], dst_noc_addr, num_commands * 16);
-    noc_async_write_barrier();
-
     DPRINT << "HDL Simulation complete!" << ENDL();
-    DPRINT << "Processed " << num_commands << " commands" << ENDL();
+    DPRINT << "Successfully processed " << num_commands << " commands" << ENDL();
     DPRINT << "Total simulation cycles: " << hdl_state.cycle_count << ENDL();
-    DPRINT << "✓ ACHIEVED: Host-to-kernel data demonstration" << ENDL();
-    DPRINT << "  - Host writes " << num_commands << " commands (" << (num_commands * 16) << " bytes) to device memory"
-           << ENDL();
-    DPRINT << "  - Kernel processes commands and executes HDL simulation" << ENDL();
-    DPRINT << "  - Host reads back " << num_commands << " results (" << (num_commands * 16) << " bytes) from device"
-           << ENDL();
-    DPRINT << "  - " << (num_commands * 8) << " total NOC transfers completed successfully" << ENDL();
+    DPRINT << "Real host communication: " << (num_commands * 8) << " words transferred" << ENDL();
 }

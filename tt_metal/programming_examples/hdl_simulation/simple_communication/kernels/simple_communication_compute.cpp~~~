@@ -1,6 +1,7 @@
 // kernels/simple_communication_compute.cpp
 #include <cstdint>
-#include "ckernel.h"
+#include "compute_kernel_api/common.h"
+#include "compute_kernel_api/tile_move_copy.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -9,30 +10,31 @@ void MAIN {
     constexpr uint32_t cb_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
-    // Initialize
-    ckernel::init();
+    // Initialize tile operations
+    init_sfpu(cb_in);
 
     while (1) {
         // Wait for input data
-        ckernel::cb_wait_front(cb_in, 1);
+        cb_wait_front(cb_in, 1);
 
         // Reserve space for output
-        ckernel::cb_reserve_back(cb_out, 1);
+        cb_reserve_back(cb_out, 1);
 
         // Process the block
-        ckernel::acquire_dst();
+        acquire_dst(tt::DstMode::Half);
 
         // Copy input tile to DST
-        ckernel::copy_tile(cb_in, 0, 0);
+        copy_tile(cb_in, 0, 0);
 
         // Pack the tile to output - this simulates HDL operations
-        ckernel::pack_tile(0, cb_out);
+        // The actual operation type would be determined by the host in a real HDL sim
+        pack_tile(0, cb_out);
 
-        ckernel::release_dst();
+        release_dst(tt::DstMode::Half);
 
         // Pop input and push output
-        ckernel::cb_pop_front(cb_in, 1);
-        ckernel::cb_push_back(cb_out, 1);
+        cb_pop_front(cb_in, 1);
+        cb_push_back(cb_out, 1);
     }
 }
 }  // namespace NAMESPACE
