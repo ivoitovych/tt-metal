@@ -1,0 +1,18 @@
+#include "compute_kernel_api.h"
+#include "compute_kernel_api/tile_move_copy.h"
+
+namespace NAMESPACE {
+void MAIN {
+    constexpr auto cb_in = tt::CBIndex::c_0;
+    constexpr auto cb_out = tt::CBIndex::c_16;
+
+    cb_wait_front(cb_in, 1);
+    cb_reserve_back(cb_out, 1);
+
+    // Simple copy operation
+    copy_tile(cb_in, 0, cb_out, 0);
+
+    cb_push_back(cb_out, 1);
+    cb_pop_front(cb_in, 1);
+}
+}  // namespace NAMESPACE
