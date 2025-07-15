@@ -1,8 +1,8 @@
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/tile_move_copy.h"
 
-namespace NAMESPACE {
-void MAIN {
+namespace chlkc_unpack {
+void unpack_main() {
     constexpr auto cb_in = tt::CBIndex::c_0;
     constexpr auto cb_out = tt::CBIndex::c_16;
 
@@ -15,4 +15,10 @@ void MAIN {
     cb_push_back(cb_out, 1);
     cb_pop_front(cb_in, 1);
 }
-}  // namespace NAMESPACE
+}  // namespace chlkc_unpack
+
+namespace chlkc_pack {
+void pack_main() {
+    // No additional packing needed in this simple example
+}
+}  // namespace chlkc_pack
