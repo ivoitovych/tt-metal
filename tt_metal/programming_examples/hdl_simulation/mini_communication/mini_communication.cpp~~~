@@ -1,0 +1,104 @@
+#include <tt_metal/host_api.hpp>
+#include <tt_metal/device.hpp>
+#include <vector>
+#include <iostream>
+
+using namespace tt::tt_metal;
+
+int main() {
+    // Initialize device
+    constexpr chip_id_t device_id = 0;
+    auto device = CreateDevice(std::vector<chip_id_t>{device_id}); // Explicit vector
+
+    // Create program
+    Program program;
+
+    // Define core and tile size (Power of Two: 2048 bytes)
+    CoreCoord core = {0, 0};
+    constexpr uint32_t tile_size = 2048; // One tile (POT)
+    constexpr uint32_t num_tiles = 1;
+
+    // Allocate DRAM buffers
+    Buffer src_buffer(
+        device.get(),
+        tile_size * num_tiles,
+        tile_size,
+        BufferType::DRAM
+    );
+
+    Buffer dst_buffer(
+        device.get(),
+        tile_size * num_tiles,
+        tile_size,
+        BufferType::DRAM
+    );
+
+    // Define L1 memory addresses (example values)
+    uint32_t l1_input_addr = 0x2000;  // L1 address for input data
+    uint32_t l1_output_addr = 0x4000; // L1 address for output data
+
+    // Create kernels
+    KernelHandle receive_kernel = CreateKernel(
+        program,
+        "tt_metal/programming_examples/hdl_simulation/mini_communication/kernels/receive_kernel.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0}
+    );
+
+    KernelHandle compute_kernel = CreateKernel(
+        program,
+        "tt_metal/programming_examples/hdl_simulation/mini_communication/kernels/compute_kernel.cpp",
+        core,
+        ComputeConfig{.math_fidelity = MathFidelity::HiFi4}
+    );
+
+    KernelHandle send_kernel = CreateKernel(
+        program,
+        "tt_metal/programming_examples/hdl_simulation/mini_communication/kernels/send_kernel.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1}
+    );
+
+    // Set runtime arguments for each kernel
+    SetRuntimeArgs(program, receive_kernel, core, {
+        src_buffer.address(), l1_input_addr, tile_size
+    });
+
+    SetRuntimeArgs(program, compute_kernel, core, {
+        l1_input_addr, l1_output_addr, tile_size
+    });
+
+    SetRuntimeArgs(program, send_kernel, core, {
+        l1_output_addr, dst_buffer.address(), tile_size
+    });
+
+    // Get command queue
+    auto& cq = device->command_queue();
+
+    // Prepare source data (BFloat16 1.0 = 0x3F80)
+    std::vector<uint16_t> src_data(tile_size / sizeof(uint16_t), 0x3F80);
+    EnqueueWriteBuffer(cq, src_buffer, src_data, false);
+
+    // Enqueue kernel execution
+    EnqueueProgram(cq, program, false);
+
+    // Read back the result
+    std::vector<uint16_t> dst_data(tile_size / sizeof(uint16_t));
+    EnqueueReadBuffer(cq, dst_buffer, dst_data, true);
+
+    // Verify result (expecting BFloat16 2.0 = 0x4000)
+    bool success = true;
+    for (size_t i = 0; i < dst_data.size(); ++i) {
+        if (dst_data[i] != 0x4000) {
+            success = false;
+            break;
+        }
+    }
+
+    std::cout << (success ? "Success: Data transferred and computed correctly!"
+                          : "Failure: Data transfer or computation error!") << std::endl;
+
+    // Cleanup
+    CloseDevice(device);
+    return 0;
+}

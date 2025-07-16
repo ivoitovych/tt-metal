@@ -3,6 +3,7 @@ set(HDL_SIMULATION_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/host_comm_simulation/host_comm_simulation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/simple_communication/simple_communication_example.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/simplest_communication/simplest_communication_example.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/mini_communication/mini_communication.cpp
 )
 
 CREATE_PGM_EXAMPLES_EXE("${HDL_SIMULATION_SRCS}" "hdl_simulation")
