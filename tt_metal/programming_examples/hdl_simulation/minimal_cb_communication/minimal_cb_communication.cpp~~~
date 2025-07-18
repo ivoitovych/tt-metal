@@ -1,0 +1,99 @@
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/bfloat16.hpp>  // For data type; adapt as needed
+#include <vector>
+#include <random>
+#include <algorithm>
+
+using namespace tt::tt_metal;
+using namespace tt::constants;  // For TILE_HEIGHT/WIDTH = 32
+
+int main(int argc, char **argv) {
+    bool pass = true;
+
+    // Initialize device
+    IDevice *device = CreateDevice(0);
+    CommandQueue& cq = device->command_queue();
+    Program program = CreateProgram();
+
+    // Data params: Small tensor (1x1x32x64 for 2 tiles)
+    constexpr uint32_t num_tiles = 2;  // Minimal for double buffering
+    constexpr uint32_t dram_buffer_size = TILE_HEIGHT * TILE_WIDTH * num_tiles * sizeof(bfloat16);  // ~4KB
+
+    // DRAM buffers for host I/O
+    InterleavedBufferConfig dram_config{
+        .device = device,
+        .size = dram_buffer_size,
+        .page_size = dram_buffer_size / num_tiles,
+        .buffer_type = BufferType::DRAM
+    };
+    std::shared_ptr<tt::tt_metal::Buffer> input_dram_buffer = CreateBuffer(dram_config);
+    std::shared_ptr<tt::tt_metal::Buffer> output_dram_buffer = CreateBuffer(dram_config);
+
+    // Host → Device: Generate and write input data (random bfloat16)
+    std::vector<bfloat16> input_vec(TILE_HEIGHT * TILE_WIDTH * num_tiles);
+    std::mt19937 rng(0);  // Seeded for reproducibility
+    std::uniform_real_distribution<float> dist(0.0f, 10.0f);
+    std::generate(input_vec.begin(), input_vec.end(), [&]() { return bfloat16(dist(rng)); });
+    EnqueueWriteBuffer(cq, *input_dram_buffer, input_vec, false);  // Async write; dereference pointer
+
+    // Circular Buffers in L1/SRAM: Input CB for compute (from reader), Output CB for writer (from compute)
+    // Use 2 pages for double buffering to allow overlap
+    constexpr uint32_t cb_page_size = TILE_HEIGHT * TILE_WIDTH * sizeof(bfloat16);
+    CircularBufferConfig cb_in_config = CircularBufferConfig(cb_page_size * 2, {{0, tt::DataFormat::Float16_b}})
+        .set_page_size(0, cb_page_size);
+    CBHandle cb_in = CreateCircularBuffer(program, CoreRange(CoreCoord(0, 0)), cb_in_config);
+
+    CircularBufferConfig cb_out_config = CircularBufferConfig(cb_page_size * 2, {{16, tt::DataFormat::Float16_b}})
+        .set_page_size(16, cb_page_size);  // CB index 16 for output
+    CBHandle cb_out = CreateCircularBuffer(program, CoreRange(CoreCoord(0, 0)), cb_out_config);
+
+    // Kernels on single core {0,0}
+    CoreCoord core = {0, 0};
+
+    // Reader kernel: DRAM → cb_in
+    KernelHandle reader_id = CreateKernel(
+        program,
+        "hdl_simulation/minimal_cb_communication/kernels/dataflow/reader_unary.cpp",  // Relative to programming_examples/
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
+    );
+
+    // Compute kernel: cb_in → process → cb_out
+    KernelHandle compute_id = CreateKernel(
+        program,
+        "hdl_simulation/minimal_cb_communication/kernels/compute/add_one.cpp",  // Relative to programming_examples/
+        core,
+        ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = false, .math_approx_mode = false}
+    );
+
+    // Writer kernel: cb_out → DRAM
+    KernelHandle writer_id = CreateKernel(
+        program,
+        "hdl_simulation/minimal_cb_communication/kernels/dataflow/writer_unary.cpp",  // Relative to programming_examples/
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default}
+    );
+
+    // Host → Kernels: Set runtime args (pass addresses and params)
+    SetRuntimeArgs(program, reader_id, core, {input_dram_buffer->address(), num_tiles});  // DRAM in addr, num_tiles
+    SetRuntimeArgs(program, compute_id, core, {num_tiles});  // Just num_tiles (CBs are predefined)
+    SetRuntimeArgs(program, writer_id, core, {output_dram_buffer->address(), num_tiles});  // DRAM out addr, num_tiles
+
+    // Launch and sync
+    EnqueueProgram(cq, program, false);
+    Finish(cq);
+
+    // Device → Host: Read output and verify (each element +1)
+    std::vector<bfloat16> result_vec;
+    EnqueueReadBuffer(cq, *output_dram_buffer, result_vec, true);  // Blocking read; dereference pointer
+    for (size_t i = 0; i < input_vec.size(); ++i) {
+        float expected = input_vec[i].to_float() + 1.0f;
+        pass &= (std::abs(result_vec[i].to_float() - expected) < 0.01f);  // Approx due to float16
+    }
+
+    pass &= CloseDevice(device);
+    return pass ? 0 : 1;
+}

@@ -1,0 +1,33 @@
+#include "compute_kernel_api.h"
+
+namespace NAMESPACE {
+void kernel_main() {
+    uint32_t num_tiles = get_arg_val<uint32_t>(0);  // From host
+
+    constexpr uint32_t cb_id_in = 0;   // Input CB
+    constexpr uint32_t cb_id_out = 16; // Output CB
+
+    const float one = 1.0f;
+
+    // Wait for all input tiles
+    cb_wait_front(cb_id_in, num_tiles);
+
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        cb_reserve_space(cb_id_out, 1);
+
+        acquire_dst();
+
+        copy_tile_init();
+        copy_tile(cb_id_in, i, 0);  // Copy input tile i to dst reg 0
+
+        sfpu::_add_(one);  // Add 1.0f to each element in dst (vectorized SFPU op)
+
+        pack_tile(0, cb_id_out);  // Pack dst reg 0 to output CB
+
+        release_dst();
+
+        cb_push_back(cb_id_out, 1);
+        cb_pop_front(cb_id_in, 1);
+    }
+}
+}

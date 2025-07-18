@@ -1,0 +1,29 @@
+#include "compute_kernel_api.h"
+#include "compute_kernel_api/tile_ops/tile_ops.h"
+#include "compute_kernel_api/sfpu/sfpu_op.h"
+
+void MAIN {
+    const uint32_t num_tiles = get_arg_val<uint32_t>(0);  // From host
+    const float one = 1.0f;
+
+    constexpr uint32_t cb_id_in = 0;
+    constexpr uint32_t cb_id_out = 16;
+
+    unary_op_init_common(cb_id_in, cb_id_out);
+
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        acquire_dst();
+        cb_wait_front(cb_id_in, 1);
+        cb_reserve_back(cb_id_out, 1);
+
+        tile_regs_acquire();
+        unary_op_exec(ADD, 0, 0, one, false, false);  // Add scalar to tile 0
+        tile_regs_commit();
+        tile_regs_release();
+
+        pack_tile(0, cb_id_out);
+        cb_push_back(cb_id_out, 1);
+        cb_pop_front(cb_id_in, 1);
+        release_dst();
+    }
+}
