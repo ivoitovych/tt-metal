@@ -1,25 +1,33 @@
-#include "compute_kernel_api.h"
+#include "compute_kernel_api/common.h"
+#include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 
+namespace NAMESPACE {
 void MAIN {
-    const uint32_t num_tiles = get_arg_val<uint32_t>(0);
+    uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
-    const uint32_t cb_id_in = 0;
-    const uint32_t cb_id_out = 16;
+    // Initialize with both input and output circular buffer indices
+    init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_16);
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         acquire_dst();
-        cb_wait_front(cb_id_in, 1);
-        cb_reserve_back(cb_id_out, 1);
 
-        tile_regs_acquire();
-        copy_tile_init();
-        copy_tile(cb_id_in, i, 0);  // Copy input tile to dst reg 0 (pass-through)
-        tile_regs_commit();
-        tile_regs_release();
+        // Wait for input
+        cb_wait_front(tt::CBIndex::c_0, 1);
 
-        pack_tile(0, cb_id_out);  // Pack to output CB
-        cb_push_back(cb_id_out, 1);
-        cb_pop_front(cb_id_in, 1);
+        // Reserve output
+        cb_reserve_back(tt::CBIndex::c_16, 1);
+
+        // Copy tile (pass-through)
+        copy_tile_to_dst_init_short(tt::CBIndex::c_0);
+        copy_tile(tt::CBIndex::c_0, 0, 0);
+        pack_tile(0, tt::CBIndex::c_16);
+
+        // Release buffers
+        cb_pop_front(tt::CBIndex::c_0, 1);
+        cb_push_back(tt::CBIndex::c_16, 1);
+
         release_dst();
     }
 }
+}  // namespace NAMESPACE

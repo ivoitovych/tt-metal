@@ -14,7 +14,7 @@ void kernel_main() {
 
     // Loop: Read tile from DRAM → push to CB
     for (uint32_t i = 0; i < num_tiles; i++) {
-        cb_reserve_space(cb_id_in, 1);  // Reserve 1 tile in CB
+        cb_reserve_back(cb_id_in, 1);  // Reserve 1 tile in CB
         uint32_t l1_write_addr = get_write_ptr(cb_id_in);
         noc_async_read_tile(i, sgen, l1_write_addr);  // Async NoC read
         noc_async_read_barrier();                     // Sync
