@@ -1,4 +1,5 @@
 #include "dataflow_api.h"
+#include "debug/dprint.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);  // DRAM input addr from host
@@ -8,6 +9,8 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_id_in);
     const DataFormat data_format = get_dataformat(cb_id_in);
 
+    DPRINT << "READER: Starting with src_addr=" << src_addr << " num_tiles=" << num_tiles << ENDL();
+
     // Address generator for interleaved DRAM
     const InterleavedAddrGenFast<true> sgen = {
         .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
@@ -16,8 +19,16 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_tiles; i++) {
         cb_reserve_back(cb_id_in, 1);  // Reserve 1 tile in CB
         uint32_t l1_write_addr = get_write_ptr(cb_id_in);
+
         noc_async_read_tile(i, sgen, l1_write_addr);  // Async NoC read
         noc_async_read_barrier();                     // Sync
+
+        // Debug: Print first few values from the tile
+        uint16_t* data_ptr = (uint16_t*)l1_write_addr;
+        DPRINT << "READER: Tile " << i << " first values: " << BF16(data_ptr[0]) << " " << BF16(data_ptr[1]) << " "
+               << BF16(data_ptr[2]) << " " << BF16(data_ptr[3]) << ENDL();
+
         cb_push_back(cb_id_in, 1);                    // Push to compute kernel
     }
+    DPRINT << "READER: Completed all tiles" << ENDL();
 }
