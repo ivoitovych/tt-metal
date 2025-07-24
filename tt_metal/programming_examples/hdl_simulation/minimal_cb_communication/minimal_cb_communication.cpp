@@ -24,7 +24,7 @@ int main(int argc, char** argv) {
     constexpr uint32_t num_tiles = 2;
     constexpr uint32_t dram_buffer_size = TILE_HEIGHT * TILE_WIDTH * num_tiles * sizeof(bfloat16);
 
-    log_info(tt::LogTest, "=== TT-Metal Compute Verification Demo ===");
+    log_info(tt::LogTest, "=== TT-Metal Pipeline Verification Demo ===");
     log_info(tt::LogTest, "Setting up buffers: {} tiles, {} bytes total", num_tiles, dram_buffer_size);
 
     // DRAM buffers for host I/O
@@ -45,7 +45,7 @@ int main(int argc, char** argv) {
         if (i % 100 == 0) {
             input_vec[i] = bfloat16(0.0f);  // Test zero
         } else if (i % 100 == 50) {
-            input_vec[i] = bfloat16(-1.0f);  // Test negative that becomes zero after +1
+            input_vec[i] = bfloat16(-1.0f);  // Test negative
         } else {
             input_vec[i] = bfloat16(static_cast<float>(i % 100) / 10.0f - 5.0f);  // -5.0 to +4.9
         }
@@ -83,7 +83,7 @@ int main(int argc, char** argv) {
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    // Compute kernel: cb_in → process (+1.0) → cb_out
+    // Compute kernel: cb_in → pass-through → cb_out
     KernelHandle compute_id = CreateKernel(
         program,
         "tt_metal/programming_examples/hdl_simulation/minimal_cb_communication/kernels/compute/add_one.cpp",
@@ -102,7 +102,7 @@ int main(int argc, char** argv) {
     SetRuntimeArgs(program, compute_id, core, {num_tiles});
     SetRuntimeArgs(program, writer_id, core, {output_dram_buffer->address(), num_tiles});
 
-    log_info(tt::LogTest, "Launching compute kernels (operation: pass-through for now)...");
+    log_info(tt::LogTest, "Launching pipeline (operation: pass-through verification)...");
 
     // Launch and sync
     EnqueueProgram(cq, program, false);
@@ -124,7 +124,7 @@ int main(int argc, char** argv) {
         result_vec[50].to_float(),
         result_vec[result_vec.size() - 1].to_float());
 
-    // Detailed computation verification
+    // Detailed pipeline verification
     uint32_t mismatches = 0;
     uint32_t perfect_matches = 0;
     float max_error = 0.0f;
@@ -162,11 +162,11 @@ int main(int argc, char** argv) {
     avg_error /= input_vec.size();
 
     // Comprehensive verification report
-    log_info(tt::LogTest, "=== COMPUTATION VERIFICATION RESULTS ===");
+    log_info(tt::LogTest, "=== PIPELINE VERIFICATION RESULTS ===");
     log_info(tt::LogTest, "Total elements processed: {}", input_vec.size());
     log_info(
         tt::LogTest, "Perfect matches: {} ({:.1f}%)", perfect_matches, 100.0f * perfect_matches / input_vec.size());
-    log_info(tt::LogTest, "Computation errors: {} ({:.1f}%)", mismatches, 100.0f * mismatches / input_vec.size());
+    log_info(tt::LogTest, "Data corruption errors: {} ({:.1f}%)", mismatches, 100.0f * mismatches / input_vec.size());
     log_info(tt::LogTest, "Maximum error: {:.6f}", max_error);
     log_info(tt::LogTest, "Average error: {:.6f}", avg_error);
 
@@ -179,7 +179,7 @@ int main(int argc, char** argv) {
     log_info(tt::LogTest, "Data processed: {} KB", (input_vec.size() * sizeof(bfloat16)) / 1024);
     log_info(tt::LogTest, "Tiles processed: {}", num_tiles);
     log_info(tt::LogTest, "Elements per tile: {}", TILE_HEIGHT * TILE_WIDTH);
-    log_info(tt::LogTest, "Computation: pass-through (input == output)");
+    log_info(tt::LogTest, "Operation: pass-through (data integrity verification)");
 
     // Test specific edge cases
     log_info(tt::LogTest, "=== EDGE CASE VERIFICATION ===");
@@ -191,23 +191,23 @@ int main(int argc, char** argv) {
         float output_val = result_vec[i].to_float();
 
         if (std::abs(input_val - 0.0f) < 1e-6f) {
-            // Test: 0 + 1 = 1
-            if (std::abs(output_val - 1.0f) > 1e-3f) {
-                log_info(tt::LogTest, "FAIL: Zero test: 0.0 + 1.0 = {:.6f} (expected 1.0)", output_val);
+            // Test: 0 → 0 (pass-through)
+            if (std::abs(output_val - 0.0f) > 1e-3f) {
+                log_info(tt::LogTest, "FAIL: Zero test: 0.0 → {:.6f} (expected 0.0)", output_val);
                 edge_cases_pass = false;
             }
         }
         if (std::abs(input_val - (-1.0f)) < 1e-6f) {
-            // Test: -1 + 1 = 0
-            if (std::abs(output_val - 0.0f) > 1e-3f) {
-                log_info(tt::LogTest, "FAIL: Negative test: -1.0 + 1.0 = {:.6f} (expected 0.0)", output_val);
+            // Test: -1 → -1 (pass-through)
+            if (std::abs(output_val - (-1.0f)) > 1e-3f) {
+                log_info(tt::LogTest, "FAIL: Negative test: -1.0 → {:.6f} (expected -1.0)", output_val);
                 edge_cases_pass = false;
             }
         }
     }
 
     if (edge_cases_pass) {
-        log_info(tt::LogTest, "PASS: Edge case verification (zero, negative values)");
+        log_info(tt::LogTest, "PASS: Edge case verification (zero, negative values preserved)");
     }
 
     pass = pass && edge_cases_pass;
@@ -216,13 +216,21 @@ int main(int argc, char** argv) {
     log_info(tt::LogTest, "Overall verification: {}", pass ? "PASS ✓" : "FAIL ✗");
 
     if (pass) {
-        log_info(tt::LogTest, "🎉 SUCCESS: TT-Metal computation pipeline verified!");
+        log_info(tt::LogTest, "🎉 SUCCESS: TT-Metal pipeline verified!");
         log_info(tt::LogTest, "✓ Data integrity maintained through full pipeline");
-        log_info(tt::LogTest, "✓ Compute kernel correctly performed pass-through operation");
-        log_info(tt::LogTest, "✓ Pipeline ready - can now add actual computation");
+        log_info(tt::LogTest, "✓ Reader kernel: DRAM → L1 CB transfer working");
+        log_info(tt::LogTest, "✓ Compute kernel: CB → CB pass-through working");
+        log_info(tt::LogTest, "✓ Writer kernel: L1 CB → DRAM transfer working");
+        log_info(tt::LogTest, "✓ Pipeline ready for computational workloads");
+        log_info(tt::LogTest, "");
+        log_info(tt::LogTest, "🚀 Ready for next steps:");
+        log_info(tt::LogTest, "   • Add actual computation in compute kernel");
+        log_info(tt::LogTest, "   • Scale to multiple cores/tiles");
+        log_info(tt::LogTest, "   • Integrate with HDL simulation acceleration");
     } else {
-        log_info(tt::LogTest, "❌ FAILURE: Computation verification failed");
+        log_info(tt::LogTest, "❌ FAILURE: Pipeline verification failed");
         log_info(tt::LogTest, "Check DPRINT output for debugging (export TT_METAL_DPRINT_CORES=0,0)");
+        log_info(tt::LogTest, "Data corruption detected - investigate pipeline integrity");
     }
 
     pass &= CloseDevice(device);
