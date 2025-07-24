@@ -21,7 +21,7 @@ void MAIN {
         // Reserve output
         cb_reserve_back(tt::CBIndex::c_16, 1);
 
-        // Copy tile (pass-through for now)
+        // Copy tile (pass-through for now - we'll add computation later)
         copy_tile_to_dst_init_short(tt::CBIndex::c_0);
         copy_tile(tt::CBIndex::c_0, 0, 0);
         pack_tile(0, tt::CBIndex::c_16);

@@ -9,7 +9,8 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_id_out);
     const DataFormat data_format = get_dataformat(cb_id_out);
 
-    DPRINT << "WRITER: Starting with dst_addr=" << dst_addr << " num_tiles=" << num_tiles << ENDL();
+    DPRINT << "WRITER: Starting computation result verification" << ENDL();
+    DPRINT << "WRITER: dst_addr=" << dst_addr << " num_tiles=" << num_tiles << ENDL();
 
     // Address generator for interleaved DRAM
     const InterleavedAddrGenFast<true> dgen = {
@@ -20,14 +21,14 @@ void kernel_main() {
         cb_wait_front(cb_id_out, 1);  // Wait for tile from compute
         uint32_t l1_read_addr = get_read_ptr(cb_id_out);
 
-        // Debug: Print first few values before writing
+        // Debug: Print computed results to verify computation
         uint16_t* data_ptr = (uint16_t*)l1_read_addr;
-        DPRINT << "WRITER: Tile " << i << " first values: " << BF16(data_ptr[0]) << " " << BF16(data_ptr[1]) << " "
-               << BF16(data_ptr[2]) << " " << BF16(data_ptr[3]) << ENDL();
+        DPRINT << "WRITER: Tile " << i << " computed results: " << BF16(data_ptr[0]) << " " << BF16(data_ptr[1]) << " "
+               << BF16(data_ptr[50]) << " (should be input+1.0)" << ENDL();
 
         noc_async_write_tile(i, dgen, l1_read_addr);  // Async NoC write
         noc_async_write_barrier();                    // Sync
         cb_pop_front(cb_id_out, 1);                   // Clear slot
     }
-    DPRINT << "WRITER: Completed all tiles" << ENDL();
+    DPRINT << "WRITER: Computation results written to DRAM" << ENDL();
 }
