@@ -24,7 +24,7 @@ int main(int argc, char** argv) {
     constexpr uint32_t num_tiles = 2;
     constexpr uint32_t dram_buffer_size = TILE_HEIGHT * TILE_WIDTH * num_tiles * sizeof(bfloat16);
 
-    log_info(tt::LogTest, "=== TT-Metal Pipeline Verification Demo ===");
+    log_info(tt::LogTest, "=== TT-Metal COMPUTATION Pipeline Demo ===");
     log_info(tt::LogTest, "Setting up buffers: {} tiles, {} bytes total", num_tiles, dram_buffer_size);
 
     // DRAM buffers for host I/O
@@ -39,13 +39,13 @@ int main(int argc, char** argv) {
     // Host → Device: Generate test data with known pattern
     std::vector<bfloat16> input_vec(TILE_HEIGHT * TILE_WIDTH * num_tiles);
 
-    // Create specific test patterns for better verification
+    // Create specific test patterns for computation verification
     for (size_t i = 0; i < input_vec.size(); ++i) {
         // Use a mix of positive, negative, zero, and fractional values
         if (i % 100 == 0) {
-            input_vec[i] = bfloat16(0.0f);  // Test zero
+            input_vec[i] = bfloat16(0.0f);  // Test zero: 0 + 1 = 1
         } else if (i % 100 == 50) {
-            input_vec[i] = bfloat16(-1.0f);  // Test negative
+            input_vec[i] = bfloat16(-1.0f);  // Test negative: -1 + 1 = 0
         } else {
             input_vec[i] = bfloat16(static_cast<float>(i % 100) / 10.0f - 5.0f);  // -5.0 to +4.9
         }
@@ -60,6 +60,17 @@ int main(int argc, char** argv) {
         input_vec[49].to_float(),
         input_vec[50].to_float(),
         input_vec[input_vec.size() - 1].to_float());
+
+    // Show expected computation results
+    log_info(
+        tt::LogTest,
+        "Expected output (input + 1.0): {:.2f} {:.2f} {:.2f} {:.2f} {:.2f} ... {:.2f}",
+        input_vec[0].to_float() + 1.0f,
+        input_vec[1].to_float() + 1.0f,
+        input_vec[2].to_float() + 1.0f,
+        input_vec[49].to_float() + 1.0f,
+        input_vec[50].to_float() + 1.0f,
+        input_vec[input_vec.size() - 1].to_float() + 1.0f);
 
     EnqueueWriteBuffer(cq, *input_dram_buffer, input_vec, false);
 
@@ -83,7 +94,7 @@ int main(int argc, char** argv) {
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    // Compute kernel: cb_in → pass-through → cb_out
+    // Compute kernel: cb_in → ADD 1.0 → cb_out
     KernelHandle compute_id = CreateKernel(
         program,
         "tt_metal/programming_examples/hdl_simulation/minimal_cb_communication/kernels/compute/add_one.cpp",
@@ -102,13 +113,13 @@ int main(int argc, char** argv) {
     SetRuntimeArgs(program, compute_id, core, {num_tiles});
     SetRuntimeArgs(program, writer_id, core, {output_dram_buffer->address(), num_tiles});
 
-    log_info(tt::LogTest, "Launching pipeline (operation: pass-through verification)...");
+    log_info(tt::LogTest, "Launching pipeline (operation: ADD 1.0 to each element)...");
 
     // Launch and sync
     EnqueueProgram(cq, program, false);
     Finish(cq);
 
-    log_info(tt::LogTest, "Kernels completed, reading and verifying results...");
+    log_info(tt::LogTest, "Kernels completed, reading and verifying COMPUTATION results...");
 
     // Device → Host: Read output and verify computation
     std::vector<bfloat16> result_vec;
@@ -124,7 +135,7 @@ int main(int argc, char** argv) {
         result_vec[50].to_float(),
         result_vec[result_vec.size() - 1].to_float());
 
-    // Detailed pipeline verification
+    // Detailed computation verification - expect output = input + 1.0
     uint32_t mismatches = 0;
     uint32_t perfect_matches = 0;
     float max_error = 0.0f;
@@ -134,18 +145,18 @@ int main(int argc, char** argv) {
     for (size_t i = 0; i < input_vec.size(); ++i) {
         float input_val = input_vec[i].to_float();
         float output_val = result_vec[i].to_float();
-        float expected_val = input_val;  // Expected: pass-through (input == output)
+        float expected_val = input_val + 1.0f;  // REAL COMPUTATION: expect input + 1.0
         float error = std::abs(output_val - expected_val);
 
         avg_error += error;
         max_error = std::max(max_error, error);
 
         // Allow for small bfloat16 precision errors
-        if (error > 1e-3f) {  // bfloat16 has limited precision
+        if (error > 1e-2f) {  // bfloat16 has limited precision, allow small errors
             if (mismatches < max_mismatches_to_show) {
                 log_info(
                     tt::LogTest,
-                    "Mismatch[{}]: input={:.6f}, expected={:.6f}, output={:.6f}, error={:.6f}",
+                    "Computation error[{}]: input={:.6f}, expected={:.6f}, output={:.6f}, error={:.6f}",
                     i,
                     input_val,
                     expected_val,
@@ -161,76 +172,96 @@ int main(int argc, char** argv) {
 
     avg_error /= input_vec.size();
 
-    // Comprehensive verification report
-    log_info(tt::LogTest, "=== PIPELINE VERIFICATION RESULTS ===");
-    log_info(tt::LogTest, "Total elements processed: {}", input_vec.size());
+    // Comprehensive computation verification report
+    log_info(tt::LogTest, "=== COMPUTATION VERIFICATION RESULTS ===");
+    log_info(tt::LogTest, "Total elements computed: {}", input_vec.size());
     log_info(
-        tt::LogTest, "Perfect matches: {} ({:.1f}%)", perfect_matches, 100.0f * perfect_matches / input_vec.size());
-    log_info(tt::LogTest, "Data corruption errors: {} ({:.1f}%)", mismatches, 100.0f * mismatches / input_vec.size());
+        tt::LogTest,
+        "Correct computations: {} ({:.1f}%)",
+        perfect_matches,
+        100.0f * perfect_matches / input_vec.size());
+    log_info(tt::LogTest, "Computation errors: {} ({:.1f}%)", mismatches, 100.0f * mismatches / input_vec.size());
     log_info(tt::LogTest, "Maximum error: {:.6f}", max_error);
     log_info(tt::LogTest, "Average error: {:.6f}", avg_error);
 
     if (mismatches > max_mismatches_to_show) {
-        log_info(tt::LogTest, "... and {} more mismatches not shown", mismatches - max_mismatches_to_show);
+        log_info(tt::LogTest, "... and {} more computation errors not shown", mismatches - max_mismatches_to_show);
     }
 
     // Performance and throughput stats
-    log_info(tt::LogTest, "=== PERFORMANCE CHARACTERISTICS ===");
+    log_info(tt::LogTest, "=== COMPUTATION PERFORMANCE ===");
     log_info(tt::LogTest, "Data processed: {} KB", (input_vec.size() * sizeof(bfloat16)) / 1024);
-    log_info(tt::LogTest, "Tiles processed: {}", num_tiles);
+    log_info(tt::LogTest, "Tiles computed: {}", num_tiles);
     log_info(tt::LogTest, "Elements per tile: {}", TILE_HEIGHT * TILE_WIDTH);
-    log_info(tt::LogTest, "Operation: pass-through (data integrity verification)");
+    log_info(tt::LogTest, "Operation: add_scalar(1.0) - REAL COMPUTATION");
 
-    // Test specific edge cases
-    log_info(tt::LogTest, "=== EDGE CASE VERIFICATION ===");
-    bool edge_cases_pass = true;
+    // Test specific computation cases
+    log_info(tt::LogTest, "=== COMPUTATION EDGE CASE VERIFICATION ===");
+    bool computation_cases_pass = true;
 
-    // Find and verify some specific test cases
-    for (size_t i = 0; i < input_vec.size() && i < 200; ++i) {
+    // Sample verification with expected computation results
+    for (size_t i = 0; i < std::min(input_vec.size(), size_t(200)); ++i) {
         float input_val = input_vec[i].to_float();
         float output_val = result_vec[i].to_float();
+        float expected_val = input_val + 1.0f;
 
         if (std::abs(input_val - 0.0f) < 1e-6f) {
-            // Test: 0 → 0 (pass-through)
-            if (std::abs(output_val - 0.0f) > 1e-3f) {
-                log_info(tt::LogTest, "FAIL: Zero test: 0.0 → {:.6f} (expected 0.0)", output_val);
-                edge_cases_pass = false;
+            // Test: 0 + 1 = 1
+            if (std::abs(output_val - 1.0f) > 1e-2f) {
+                log_info(tt::LogTest, "FAIL: Zero computation: 0.0 + 1.0 → {:.6f} (expected 1.0)", output_val);
+                computation_cases_pass = false;
             }
         }
         if (std::abs(input_val - (-1.0f)) < 1e-6f) {
-            // Test: -1 → -1 (pass-through)
-            if (std::abs(output_val - (-1.0f)) > 1e-3f) {
-                log_info(tt::LogTest, "FAIL: Negative test: -1.0 → {:.6f} (expected -1.0)", output_val);
-                edge_cases_pass = false;
+            // Test: -1 + 1 = 0
+            if (std::abs(output_val - 0.0f) > 1e-2f) {
+                log_info(tt::LogTest, "FAIL: Negative computation: -1.0 + 1.0 → {:.6f} (expected 0.0)", output_val);
+                computation_cases_pass = false;
+            }
+        }
+        if (std::abs(input_val - 2.39f) < 0.1f) {  // Allow some tolerance for finding this value
+            // Test: ~2.39 + 1 = ~3.39
+            if (std::abs(output_val - (input_val + 1.0f)) > 1e-2f) {
+                log_info(
+                    tt::LogTest,
+                    "FAIL: Positive computation: {:.3f} + 1.0 → {:.6f} (expected {:.3f})",
+                    input_val,
+                    output_val,
+                    input_val + 1.0f);
+                computation_cases_pass = false;
             }
         }
     }
 
-    if (edge_cases_pass) {
-        log_info(tt::LogTest, "PASS: Edge case verification (zero, negative values preserved)");
+    if (computation_cases_pass) {
+        log_info(tt::LogTest, "PASS: Computation edge cases verified (0+1→1, -1+1→0, etc.)");
     }
 
-    pass = pass && edge_cases_pass;
+    pass = pass && computation_cases_pass;
 
-    log_info(tt::LogTest, "=== FINAL RESULT ===");
-    log_info(tt::LogTest, "Overall verification: {}", pass ? "PASS ✓" : "FAIL ✗");
+    log_info(tt::LogTest, "=== FINAL COMPUTATION RESULT ===");
+    log_info(tt::LogTest, "Overall computation verification: {}", pass ? "PASS ✓" : "FAIL ✗");
 
     if (pass) {
-        log_info(tt::LogTest, "🎉 SUCCESS: TT-Metal pipeline verified!");
-        log_info(tt::LogTest, "✓ Data integrity maintained through full pipeline");
-        log_info(tt::LogTest, "✓ Reader kernel: DRAM → L1 CB transfer working");
-        log_info(tt::LogTest, "✓ Compute kernel: CB → CB pass-through working");
-        log_info(tt::LogTest, "✓ Writer kernel: L1 CB → DRAM transfer working");
-        log_info(tt::LogTest, "✓ Pipeline ready for computational workloads");
+        log_info(tt::LogTest, "🎉 SUCCESS: TT-Metal COMPUTATION pipeline verified!");
+        log_info(tt::LogTest, "✓ REAL computation performed: added 1.0 to every element");
+        log_info(tt::LogTest, "✓ Mathematical correctness: output = input + 1.0");
+        log_info(tt::LogTest, "✓ Compute kernel: SFPU operations working correctly");
+        log_info(tt::LogTest, "✓ Pipeline ready for complex mathematical workloads");
         log_info(tt::LogTest, "");
-        log_info(tt::LogTest, "🚀 Ready for next steps:");
-        log_info(tt::LogTest, "   • Add actual computation in compute kernel");
-        log_info(tt::LogTest, "   • Scale to multiple cores/tiles");
-        log_info(tt::LogTest, "   • Integrate with HDL simulation acceleration");
+        log_info(tt::LogTest, "🧮 COMPUTATION VERIFIED:");
+        log_info(tt::LogTest, "   • 0.0 + 1.0 = 1.0 ✓");
+        log_info(tt::LogTest, "   • -1.0 + 1.0 = 0.0 ✓");
+        log_info(tt::LogTest, "   • All {} elements computed correctly", perfect_matches);
+        log_info(tt::LogTest, "");
+        log_info(tt::LogTest, "🚀 Ready for advanced computations:");
+        log_info(tt::LogTest, "   • Complex mathematical operations");
+        log_info(tt::LogTest, "   • Multi-step computational pipelines");
+        log_info(tt::LogTest, "   • HDL simulation acceleration workloads");
     } else {
-        log_info(tt::LogTest, "❌ FAILURE: Pipeline verification failed");
+        log_info(tt::LogTest, "❌ FAILURE: Computation verification failed");
         log_info(tt::LogTest, "Check DPRINT output for debugging (export TT_METAL_DPRINT_CORES=0,0)");
-        log_info(tt::LogTest, "Data corruption detected - investigate pipeline integrity");
+        log_info(tt::LogTest, "Mathematical computation errors detected - investigate compute kernel");
     }
 
     pass &= CloseDevice(device);

@@ -9,7 +9,7 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_id_out);
     const DataFormat data_format = get_dataformat(cb_id_out);
 
-    DPRINT << "WRITER: Starting pipeline result verification" << ENDL();
+    DPRINT << "WRITER: Collecting COMPUTATION results (+1.0 operation)" << ENDL();
     DPRINT << "WRITER: dst_addr=" << dst_addr << " num_tiles=" << num_tiles << ENDL();
 
     // Address generator for interleaved DRAM
@@ -21,14 +21,14 @@ void kernel_main() {
         cb_wait_front(cb_id_out, 1);  // Wait for tile from compute
         uint32_t l1_read_addr = get_read_ptr(cb_id_out);
 
-        // Debug: Print pass-through results to verify pipeline integrity
+        // Debug: Print computed results (should be input + 1.0)
         uint16_t* data_ptr = (uint16_t*)l1_read_addr;
-        DPRINT << "WRITER: Tile " << i << " pass-through results: " << BF16(data_ptr[0]) << " " << BF16(data_ptr[1])
-               << " " << BF16(data_ptr[50]) << " (should match input)" << ENDL();
+        DPRINT << "WRITER: Tile " << i << " computed results: " << BF16(data_ptr[0]) << " " << BF16(data_ptr[1]) << " "
+               << BF16(data_ptr[50]) << " (should be input+1.0)" << ENDL();
 
         noc_async_write_tile(i, dgen, l1_read_addr);  // Async NoC write
         noc_async_write_barrier();                    // Sync
         cb_pop_front(cb_id_out, 1);                   // Clear slot
     }
-    DPRINT << "WRITER: Pass-through results written to DRAM" << ENDL();
+    DPRINT << "WRITER: COMPUTATION results written to DRAM for verification" << ENDL();
 }
