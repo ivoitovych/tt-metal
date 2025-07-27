@@ -18,3 +18,6 @@
 	path = tt_metal/third_party/tt_llk
 	url = https://github.com/tenstorrent/tt-llk.git
 	branch = main
+[submodule "tt_metal/programming_examples/hdl_simulation_accelerated"]
+	path = tt_metal/programming_examples/hdl_simulation_accelerated
+	url = git@github.com:ivoitovych/hdl-simulation-accelerated.git
