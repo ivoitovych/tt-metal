@@ -9,7 +9,7 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_id_in);
     const DataFormat data_format = get_dataformat(cb_id_in);
 
-    DPRINT << "READER: Starting COMPUTATION pipeline (add 1.0 operation)" << ENDL();
+    DPRINT << "READER: Starting pipeline verification" << ENDL();
     DPRINT << "READER: src_addr=" << src_addr << " num_tiles=" << num_tiles << ENDL();
 
     // Address generator for interleaved DRAM
@@ -24,12 +24,12 @@ void kernel_main() {
         noc_async_read_tile(i, sgen, l1_write_addr);  // Async NoC read
         noc_async_read_barrier();                     // Sync
 
-        // Debug: Print input values that will be computed on
+        // Debug: Print sample values for pipeline verification
         uint16_t* data_ptr = (uint16_t*)l1_write_addr;
-        DPRINT << "READER: Tile " << i << " input: " << BF16(data_ptr[0]) << " " << BF16(data_ptr[1]) << " "
-               << BF16(data_ptr[50]) << " (will become +1.0 each)" << ENDL();
+        DPRINT << "READER: Tile " << i << " input samples: " << BF16(data_ptr[0]) << " " << BF16(data_ptr[1]) << " "
+               << BF16(data_ptr[50]) << " (pass-through expected)" << ENDL();
 
         cb_push_back(cb_id_in, 1);                    // Push to compute kernel
     }
-    DPRINT << "READER: Input data ready for computation (+1.0 operation)" << ENDL();
+    DPRINT << "READER: Completed - ready for pass-through" << ENDL();
 }
