@@ -29,27 +29,33 @@ void kernel_main() {
 
     DPRINT << "ALL-IN-ONE: Starting pipeline with " << num_tiles << " tiles, tile_bytes=" << tile_bytes << ENDL();
 
-    // Use separate L1 buffers for input and output to avoid corruption
+    // Use separate L1 buffers for input and output
     constexpr uint32_t l1_input_buffer_addr = 0x10000;
-    constexpr uint32_t l1_output_buffer_addr = 0x20000;  // Different address!
-
-    // Smaller chunk size for NOC transactions (4KB instead of 16KB)
-    constexpr uint32_t noc_chunk_size = 4096;
+    constexpr uint32_t l1_output_buffer_addr = 0x20000;
 
     uint32_t num_structs_per_tile = tile_bytes / input_struct_size;
 
     const DataFormat data_format = DataFormat::UInt8;
 
+    // Create interleaved address generators with correct page size
+    const InterleavedAddrGenFast<true> input_gen = {
+        .bank_base_address = src_addr,
+        .page_size = tile_bytes,  // Each tile is one page
+        .data_format = data_format};
+
+    const InterleavedAddrGenFast<true> output_gen = {
+        .bank_base_address = dst_addr,
+        .page_size = tile_bytes,  // Each tile is one page
+        .data_format = data_format};
+
     // Process each tile
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
         DPRINT << "ALL-IN-ONE: Processing tile " << tile_idx << ENDL();
 
-        // Step 1: Read input tile from DRAM to L1 in chunks
-        uint32_t tile_offset = tile_idx * tile_bytes;
-        for (uint32_t chunk = 0; chunk < tile_bytes; chunk += noc_chunk_size) {
-            uint64_t src_noc_addr = get_noc_addr(src_addr + tile_offset + chunk);
-            noc_async_read(src_noc_addr, l1_input_buffer_addr + chunk, noc_chunk_size);
-        }
+        // Step 1: Read entire tile from DRAM to L1
+        // For interleaved buffers, we need to use the proper NOC address calculation
+        uint64_t src_noc_addr = get_noc_addr(tile_idx, input_gen);
+        noc_async_read_tile(tile_idx, input_gen, l1_input_buffer_addr);
         noc_async_read_barrier();
 
         // Step 2: Process data (transformation)
@@ -72,19 +78,16 @@ void kernel_main() {
             }
         }
 
-        // Debug: Print first and last struct of tile
-        DPRINT << "Tile " << tile_idx << " first: " << input_structs[0].float_value << " -> "
-               << output_structs[0].result_value << ENDL();
-        if (num_structs_per_tile > 1) {
-            DPRINT << "Tile " << tile_idx << " last: " << input_structs[num_structs_per_tile - 1].float_value << " -> "
-                   << output_structs[num_structs_per_tile - 1].result_value << ENDL();
+        // Debug: Print first few structs with actual values
+        DPRINT << "Tile " << tile_idx << " samples:" << ENDL();
+        for (uint32_t i = 0; i < 3 && i < num_structs_per_tile; i++) {
+            DPRINT << "  [" << i << "]: float=" << input_structs[i].float_value << " int=" << input_structs[i].int_value
+                   << " -> result=" << output_structs[i].result_value << " status=" << output_structs[i].status_code
+                   << ENDL();
         }
 
-        // Step 3: Write transformed data from L1 to output DRAM in chunks
-        for (uint32_t chunk = 0; chunk < tile_bytes; chunk += noc_chunk_size) {
-            uint64_t dst_noc_addr = get_noc_addr(dst_addr + tile_offset + chunk);
-            noc_async_write(l1_output_buffer_addr + chunk, dst_noc_addr, noc_chunk_size);
-        }
+        // Step 3: Write entire tile from L1 to output DRAM
+        noc_async_write_tile(l1_output_buffer_addr, output_gen, tile_idx);
         noc_async_write_barrier();
     }
 
