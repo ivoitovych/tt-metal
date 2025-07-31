@@ -35,27 +35,19 @@ void kernel_main() {
 
     uint32_t num_structs_per_tile = tile_bytes / input_struct_size;
 
-    const DataFormat data_format = DataFormat::UInt8;
-
-    // Create interleaved address generators with correct page size
-    const InterleavedAddrGenFast<true> input_gen = {
-        .bank_base_address = src_addr,
-        .page_size = tile_bytes,  // Each tile is one page
-        .data_format = data_format};
-
-    const InterleavedAddrGenFast<true> output_gen = {
-        .bank_base_address = dst_addr,
-        .page_size = tile_bytes,  // Each tile is one page
-        .data_format = data_format};
-
-    // Process each tile
+    // Process each tile (page)
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
         DPRINT << "ALL-IN-ONE: Processing tile " << tile_idx << ENDL();
 
-        // Step 1: Read entire tile from DRAM to L1
-        // For interleaved buffers, we need to use the proper NOC address calculation
-        uint64_t src_noc_addr = get_noc_addr(tile_idx, input_gen);
-        noc_async_read_tile(tile_idx, input_gen, l1_input_buffer_addr);
+        // Step 1: Read input tile from DRAM to L1
+        // For interleaved buffers, use the tile index to get the correct page
+        uint32_t src_buffer_l1_addr = l1_input_buffer_addr;
+
+        // Create NOC address for this specific page/tile in the interleaved buffer
+        uint64_t src_noc_addr = get_noc_addr(tile_idx, src_addr, 0, tile_bytes);
+
+        // Read the entire tile at once
+        noc_async_read_one_packet(src_noc_addr, src_buffer_l1_addr, tile_bytes);
         noc_async_read_barrier();
 
         // Step 2: Process data (transformation)
@@ -86,8 +78,12 @@ void kernel_main() {
                    << ENDL();
         }
 
-        // Step 3: Write entire tile from L1 to output DRAM
-        noc_async_write_tile(l1_output_buffer_addr, output_gen, tile_idx);
+        // Step 3: Write transformed data from L1 to output DRAM
+        uint32_t dst_buffer_l1_addr = l1_output_buffer_addr;
+        uint64_t dst_noc_addr = get_noc_addr(tile_idx, dst_addr, 0, tile_bytes);
+
+        // Write the entire tile at once
+        noc_async_write_one_packet(dst_buffer_l1_addr, dst_noc_addr, tile_bytes);
         noc_async_write_barrier();
     }
 
