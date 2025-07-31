@@ -1,0 +1,148 @@
+
+ubuntu@tt-metal-dev-epam-iaroslav-n300:~/setup/tt-metal$
+ubuntu@tt-metal-dev-epam-iaroslav-n300:~/setup/tt-metal$ ./build_Debug/programming_examples/hdl_simulation/minimal_struct_dataflow
+2025-07-31 14:30:18.618 | INFO     | SiliconDriver   - Opened PCI device 0; KMD version: 1.33.0, IOMMU: disabled
+  Detecting chips (found 1)
+                 Device | INFO     | Opening user mode device driver
+2025-07-31 14:30:18.647 | INFO     | SiliconDriver   - Opened PCI device 0; KMD version: 1.33.0, IOMMU: disabled
+2025-07-31 14:30:18.657 | INFO     | SiliconDriver   - Opened PCI device 0; KMD version: 1.33.0, IOMMU: disabled
+2025-07-31 14:30:18.667 | INFO     | SiliconDriver   - Harvesting mask for chip 0 is 0x200 (physical layout: 0x1, logical: 0x200, simulated harvesting mask: 0x0).
+2025-07-31 14:30:18.778 | INFO     | SiliconDriver   - Opened PCI device 0; KMD version: 1.33.0, IOMMU: disabled
+2025-07-31 14:30:18.813 | WARNING  | SiliconDriver   - init_detect_tt_device_numanodes(): Could not determine NumaNodeSet for TT device (physical_device_id: 0 pci_bus_id: 0000:04:00.0)
+2025-07-31 14:30:18.813 | WARNING  | SiliconDriver   - Could not find NumaNodeSet for TT Device (physical_device_id: 0 pci_bus_id: 0000:04:00.0)
+2025-07-31 14:30:18.815 | WARNING  | SiliconDriver   - bind_area_memory_nodeset(): Unable to determine TT Device to NumaNode mapping for physical_device_id: 0. Skipping membind.
+2025-07-31 14:30:18.815 | WARNING  | SiliconDriver   - ---- ttSiliconDevice::init_hugepage: bind_area_to_memory_nodeset() failed (physical_device_id: 0 ch: 0). Hugepage allocation is not on NumaNode matching TT Device. Side-Effect is decreased Device->Host perf (Issue #893).
+2025-07-31 14:30:18.817 | INFO     | SiliconDriver   - Detected PCI devices: [0]
+2025-07-31 14:30:18.817 | INFO     | SiliconDriver   - Using local chip ids: {0} and remote chip ids {}
+2025-07-31 14:30:18.827 | INFO     | SiliconDriver   - Software version 6.0.0, Ethernet FW version 6.14.0 (Device 0)
+                  Metal | INFO     | Initializing device 0. Program cache is NOT enabled
+                  Metal | INFO     | AI CLK for device 0 is:   1000 MHz
+                 Always | WARNING  | Dispatch Core Type = CoreType::WORKER
+                  Metal | INFO     | DPRINT enabled on device 0, worker core (x=0,y=0) (virtual (x=18,y=18)).
+                  Metal | INFO     | DPRINT Server attached device 0
+                   Test | INFO     | === TT-Metal Arbitrary Data Structure Communication Demo ===
+                   Test | INFO     | Buffer setup details:
+                   Test | INFO     |   num_tiles: 2
+                   Test | INFO     |   elements_per_tile: 1024
+                   Test | INFO     |   tile_bytes: 16384 (0x4000)
+                   Test | INFO     |   dram_buffer_size: 32768 bytes
+                   Test | INFO     |   output_buffer_size: 32768 bytes
+                   Test | INFO     |   InputStruct size: 16 bytes
+                   Test | INFO     |   OutputStruct size: 16 bytes
+                   Test | INFO     | DRAM buffer addresses:
+                   Test | INFO     |   input_buffer address: 0x20
+                   Test | INFO     |   output_buffer address: 0x4020
+                   Test | INFO     |   input page_size: 16384 (should be 16384)
+                   Test | INFO     |   output page_size: 16384 (should be 16384)
+                   Test | INFO     | Test data patterns:
+                   Test | INFO     |   Tile 0 first element [0]: float=-5.00, int=0, short=0, char=0
+                   Test | INFO     |   Tile 1 first element [1024]: float=-2.60, int=1024, short=1024, char=8
+                   Test | INFO     | Kernel runtime arguments:
+                   Test | INFO     |   src_addr: 0x20
+                   Test | INFO     |   dst_addr: 0x4020
+                   Test | INFO     |   num_tiles: 2
+                   Test | INFO     |   input_struct_size: 16
+                   Test | INFO     |   output_struct_size: 16
+                   Test | INFO     |   tile_bytes: 16384 (0x4000)
+                   Test | INFO     |   Expected tile 0 input addr: 0x20, output addr: 0x4020
+                   Test | INFO     |   Expected tile 1 input addr: 0x4020, output addr: 0x8020
+                   Test | INFO     | Launching pipeline (operation: struct transformation)...
+0:(x=0,y=0):BR: ALL-IN-ONE: Starting pipeline with 2 tiles, tile_bytes=16384
+0:(x=0,y=0):BR: ALL-IN-ONE: Runtime args - src_addr=0x32 dst_addr=0x16416
+0:(x=0,y=0):BR: ALL-IN-ONE: input_size=16 output_size=16
+0:(x=0,y=0):BR: ALL-IN-ONE: Processing 1024 structs per tile
+0:(x=0,y=0):BR: ALL-IN-ONE: ===== Processing tile 0 =====
+0:(x=0,y=0):BR: ALL-IN-ONE: Tile 0 using InterleavedAddrGen:
+0:(x=0,y=0):BR:   src_gen: bank_base=0x32 page_size=16384
+0:(x=0,y=0):BR:   dst_gen: bank_base=0x16416 page_size=16384
+0:(x=0,y=0):BR: ALL-IN-ONE: Reading tile 0 from DRAM...
+0:(x=0,y=0):BR: ALL-IN-ONE: Read complete.
+0:(x=0,y=0):BR: ALL-IN-ONE: Raw input data from tile 0:
+0:(x=0,y=0):BR:   Raw[0]: float=-5 int=0 short=0 char=0
+0:(x=0,y=0):BR:   Raw[1]: float=-4.9 int=1 short=1 char=1
+0:(x=0,y=0):BR:   Raw[2]: float=-4.8 int=2 short=2 char=2
+0:(x=0,y=0):BR:   Raw[3]: float=-4.7 int=3 short=3 char=3
+0:(x=0,y=0):BR:   Raw[4]: float=-4.6 int=4 short=4 char=4
+0:(x=0,y=0):BR: ALL-IN-ONE: Processing 1024 structures...
+0:(x=0,y=0):BR: ALL-IN-ONE: Processed output data for tile 0:
+0:(x=0,y=0):BR:   Out[0]: result=-10 status=0 iterations=0 flags=0
+0:(x=0,y=0):BR:   Out[1]: result=-9.8 status=1 iterations=1 flags=1
+0:(x=0,y=0):BR:   Out[2]: result=-9.6 status=2 iterations=2 flags=2
+0:(x=0,y=0):BR:   Out[3]: result=-9.4 status=3 iterations=3 flags=3
+0:(x=0,y=0):BR:   Out[4]: result=-9.2 status=4 iterations=4 flags=4
+0:(x=0,y=0):BR: ALL-IN-ONE: Writing tile 0 to DRAM...
+0:(x=0,y=0):BR: ALL-IN-ONE: Write complete.
+0:(x=0,y=0):BR: ALL-IN-ONE: ===== Tile 0 complete =====
+0:(x=0,y=0):BR: ALL-IN-ONE: ===== Processing tile 1 =====
+0:(x=0,y=0):BR: ALL-IN-ONE: Tile 1 using InterleavedAddrGen:
+0:(x=0,y=0):BR:   src_gen: bank_base=0x32 page_size=16384
+0:(x=0,y=0):BR:   dst_gen: bank_base=0x16416 page_size=16384
+0:(x=0,y=0):BR: ALL-IN-ONE: Reading tile 1 from DRAM...
+0:(x=0,y=0):BR: ALL-IN-ONE: Read complete.
+0:(x=0,y=0):BR: ALL-IN-ONE: Raw input data from tile 1:
+0:(x=0,y=0):BR:   Raw[0]: float=-2.6 int=1024 short=1024 char=8
+0:(x=0,y=0):BR:   Raw[1]: float=-2.5 int=1025 short=1025 char=9
+0:(x=0,y=0):BR:   Raw[2]: float=-2.4 int=1026 short=1026 char=10
+0:(x=0,y=0):BR:   Raw[3]: float=-2.3 int=1027 short=1027 char=11
+0:(x=0,y=0):BR:   Raw[4]: float=-2.2 int=1028 short=1028 char=12
+0:(x=0,y=0):BR: ALL-IN-ONE: Processing 1024 structures...
+0:(x=0,y=0):BR: ALL-IN-ONE: Processed output data for tile 1:
+0:(x=0,y=0):BR:   Out[0]: result=-5.2 status=1024 iterations=24 flags=8
+0:(x=0,y=0):BR:   Out[1]: result=-5 status=1025 iterations=25 flags=9
+0:(x=0,y=0):BR:   Out[2]: result=-4.8 status=1026 iterations=26 flags=10
+0:(x=0,y=0):BR:   Out[3]: result=-4.6 status=1027 iterations=27 flags=11
+0:(x=0,y=0):BR:   Out[4]: result=-4.4 status=1028 iterations=28 flags=12
+0:(x=0,y=0):BR: ALL-IN-ONE: Writing tile 1 to DRAM...
+0:(x=0,y=0):BR: ALL-IN-ONE: Write complete.
+                   Test | INFO     | Kernels completed, reading and verifying results...
+0:(x=0,y=0):BR: ALL-IN-ONE: ===== Tile 1 complete =====
+0:(x=0,y=0):BR: ALL-IN-ONE: ===== PIPELINE COMPLETE =====
+0:(x=0,y=0):BR: ALL-IN-ONE: Processed 2 tiles successfully
+                   Test | INFO     | Verification by tile:
+                   Test | INFO     | === TILE 0 ANALYSIS ===
+                   Test | INFO     |   Elements 0 to 1023
+                   Test | INFO     |     [0]: input=-5.00/0/0/0 -> output=-10.00/0/0/0 (expected=-10.00/0/0/0) ✓
+                   Test | INFO     |     [1]: input=-4.90/1/1/1 -> output=-9.80/1/1/1 (expected=-9.80/1/1/1) ✓
+                   Test | INFO     |     [2]: input=-4.80/2/2/2 -> output=-9.60/2/2/2 (expected=-9.60/2/2/2) ✓
+                   Test | INFO     |     [3]: input=-4.70/3/3/3 -> output=-9.40/3/3/3 (expected=-9.40/3/3/3) ✓
+                   Test | INFO     |     [4]: input=-4.60/4/4/4 -> output=-9.20/4/4/4 (expected=-9.20/4/4/4) ✓
+                   Test | INFO     |   Tile 0 results: 1024 matches, 0 errors (100.0% success)
+                   Test | INFO     | === TILE 1 ANALYSIS ===
+                   Test | INFO     |   Elements 1024 to 2047
+                   Test | INFO     |     [1024]: input=-2.60/1024/1024/8 -> output=-5.20/1024/24/8 (expected=-5.20/1024/24/8) ✓
+                   Test | INFO     |     [1025]: input=-2.50/1025/1025/9 -> output=-5.00/1025/25/9 (expected=-5.00/1025/25/9) ✓
+                   Test | INFO     |     [1026]: input=-2.40/1026/1026/10 -> output=-4.80/1026/26/10 (expected=-4.80/1026/26/10) ✓
+                   Test | INFO     |     [1027]: input=-2.30/1027/1027/11 -> output=-4.60/1027/27/11 (expected=-4.60/1027/27/11) ✓
+                   Test | INFO     |     [1028]: input=-2.20/1028/1028/12 -> output=-4.40/1028/28/12 (expected=-4.40/1028/28/12) ✓
+                   Test | INFO     |   Tile 1 results: 1024 matches, 0 errors (100.0% success)
+                   Test | INFO     | === OVERALL VERIFICATION RESULTS ===
+                   Test | INFO     | Total elements processed: 2048
+                   Test | INFO     | Perfect matches: 2048 (100.0%)
+                   Test | INFO     | Data corruption errors: 0 (0.0%)
+                   Test | INFO     | === PERFORMANCE CHARACTERISTICS ===
+                   Test | INFO     | Input data processed: 32 KB
+                   Test | INFO     | Output data generated: 32 KB
+                   Test | INFO     | Tiles processed: 2
+                   Test | INFO     | Elements per tile: 1024
+                   Test | INFO     | Operation: struct transformation (arbitrary data processing)
+                   Test | INFO     | === EDGE CASE VERIFICATION ===
+                   Test | INFO     | PASS: Zero test: 0.0 → 0.000000 (expected 0.0)
+                   Test | INFO     | PASS: Zero test: 0.0 → 0.000000 (expected 0.0)
+                   Test | INFO     | PASS: Edge case verification (zero values preserved)
+                   Test | INFO     | === FINAL RESULT ===
+                   Test | INFO     | Overall verification: PASS ✓
+                   Test | INFO     | 🎉 SUCCESS: TT-Metal arbitrary data structure pipeline verified!
+                   Test | INFO     | ✓ Data integrity maintained through full pipeline
+                   Test | INFO     | ✓ Reader kernel: DRAM → L1 CB transfer working with custom structures
+                   Test | INFO     | ✓ Compute kernel: Structure transformation working
+                   Test | INFO     | ✓ Writer kernel: L1 CB → DRAM transfer working with different structures
+                   Test | INFO     | ✓ Pipeline ready for arbitrary data processing workloads
+                   Test | INFO     |
+                   Test | INFO     | 🚀 Ready for next steps:
+                   Test | INFO     |    • Add more complex structure transformations
+                   Test | INFO     |    • Scale to multiple cores/tiles
+                   Test | INFO     |    • Integrate with HDL simulation acceleration
+                  Metal | INFO     | Closing device 0
+                  Metal | INFO     | DPRINT Server dettached device 0
+                  Metal | INFO     | Disabling and clearing program cache on device 0
+ubuntu@tt-metal-dev-epam-iaroslav-n300:~/setup/tt-metal$

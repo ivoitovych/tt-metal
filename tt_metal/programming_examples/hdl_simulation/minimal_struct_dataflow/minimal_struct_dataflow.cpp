@@ -50,34 +50,38 @@ int main(int argc, char** argv) {
     constexpr uint32_t elements_per_tile = TILE_HEIGHT * TILE_WIDTH;
     constexpr uint32_t dram_buffer_size = elements_per_tile * num_tiles * sizeof(InputStruct);
     constexpr uint32_t output_buffer_size = elements_per_tile * num_tiles * sizeof(OutputStruct);
+    constexpr uint32_t tile_bytes = elements_per_tile * sizeof(InputStruct);
 
     log_info(tt::LogTest, "=== TT-Metal Arbitrary Data Structure Communication Demo ===");
-    log_info(
-        tt::LogTest,
-        "Setting up buffers: {} tiles, {} bytes input, {} bytes output",
-        num_tiles,
-        dram_buffer_size,
-        output_buffer_size);
-    log_info(
-        tt::LogTest,
-        "InputStruct size: {} bytes, OutputStruct size: {} bytes",
-        sizeof(InputStruct),
-        sizeof(OutputStruct));
+    log_info(tt::LogTest, "Buffer setup details:");
+    log_info(tt::LogTest, "  num_tiles: {}", num_tiles);
+    log_info(tt::LogTest, "  elements_per_tile: {}", elements_per_tile);
+    log_info(tt::LogTest, "  tile_bytes: {} (0x{:x})", tile_bytes, tile_bytes);
+    log_info(tt::LogTest, "  dram_buffer_size: {} bytes", dram_buffer_size);
+    log_info(tt::LogTest, "  output_buffer_size: {} bytes", output_buffer_size);
+    log_info(tt::LogTest, "  InputStruct size: {} bytes", sizeof(InputStruct));
+    log_info(tt::LogTest, "  OutputStruct size: {} bytes", sizeof(OutputStruct));
 
     // DRAM buffers for host I/O
     InterleavedBufferConfig input_dram_config{
         .device = device,
         .size = dram_buffer_size,
-        .page_size = dram_buffer_size / num_tiles,
+        .page_size = dram_buffer_size / num_tiles,  // This should equal tile_bytes
         .buffer_type = BufferType::DRAM};
     std::shared_ptr<tt::tt_metal::Buffer> input_dram_buffer = CreateBuffer(input_dram_config);
 
     InterleavedBufferConfig output_dram_config{
         .device = device,
         .size = output_buffer_size,
-        .page_size = output_buffer_size / num_tiles,
+        .page_size = output_buffer_size / num_tiles,  // This should equal tile_bytes
         .buffer_type = BufferType::DRAM};
     std::shared_ptr<tt::tt_metal::Buffer> output_dram_buffer = CreateBuffer(output_dram_config);
+
+    log_info(tt::LogTest, "DRAM buffer addresses:");
+    log_info(tt::LogTest, "  input_buffer address: 0x{:x}", input_dram_buffer->address());
+    log_info(tt::LogTest, "  output_buffer address: 0x{:x}", output_dram_buffer->address());
+    log_info(tt::LogTest, "  input page_size: {} (should be {})", input_dram_config.page_size, tile_bytes);
+    log_info(tt::LogTest, "  output page_size: {} (should be {})", output_dram_config.page_size, tile_bytes);
 
     // Host → Device: Generate test data with custom structures
     std::vector<InputStruct> input_vec(elements_per_tile * num_tiles);
@@ -92,21 +96,22 @@ int main(int argc, char** argv) {
         std::memset(input_vec[i].padding, 0, sizeof(input_vec[i].padding));
     }
 
+    log_info(tt::LogTest, "Test data patterns:");
     log_info(
         tt::LogTest,
-        "Input sample[0]: float={:.2f}, int={}, short={}, char={}",
+        "  Tile 0 first element [0]: float={:.2f}, int={}, short={}, char={}",
         input_vec[0].float_value,
         input_vec[0].int_value,
         input_vec[0].short_value,
         static_cast<int>(input_vec[0].char_value));
-
     log_info(
         tt::LogTest,
-        "Input sample[50]: float={:.2f}, int={}, short={}, char={}",
-        input_vec[50].float_value,
-        input_vec[50].int_value,
-        input_vec[50].short_value,
-        static_cast<int>(input_vec[50].char_value));
+        "  Tile 1 first element [{}]: float={:.2f}, int={}, short={}, char={}",
+        elements_per_tile,
+        input_vec[elements_per_tile].float_value,
+        input_vec[elements_per_tile].int_value,
+        input_vec[elements_per_tile].short_value,
+        static_cast<int>(input_vec[elements_per_tile].char_value));
 
     // Write input structures to device DRAM
     EnqueueWriteBuffer(cq, *input_dram_buffer, input_vec, false);
@@ -115,7 +120,6 @@ int main(int argc, char** argv) {
     CoreCoord core = {0, 0};
 
     // Single all-in-one kernel: DRAM → process → DRAM
-    // This avoids NOC conflicts by using a single data movement kernel
     KernelHandle all_in_one_id = CreateKernel(
         program,
         "tt_metal/programming_examples/hdl_simulation/minimal_struct_dataflow/kernels/dataflow/all_in_one_struct.cpp",
@@ -123,7 +127,6 @@ int main(int argc, char** argv) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Set runtime args for the all-in-one kernel
-    constexpr uint32_t tile_bytes = elements_per_tile * sizeof(InputStruct);
     SetRuntimeArgs(
         program,
         all_in_one_id,
@@ -137,6 +140,26 @@ int main(int argc, char** argv) {
             tile_bytes                      // tile_bytes
         });
 
+    log_info(tt::LogTest, "Kernel runtime arguments:");
+    log_info(tt::LogTest, "  src_addr: 0x{:x}", input_dram_buffer->address());
+    log_info(tt::LogTest, "  dst_addr: 0x{:x}", output_dram_buffer->address());
+    log_info(tt::LogTest, "  num_tiles: {}", num_tiles);
+    log_info(tt::LogTest, "  input_struct_size: {}", sizeof(InputStruct));
+    log_info(tt::LogTest, "  output_struct_size: {}", sizeof(OutputStruct));
+    log_info(tt::LogTest, "  tile_bytes: {} (0x{:x})", tile_bytes, tile_bytes);
+
+    // Expected tile addresses
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        uint64_t expected_input_addr = input_dram_buffer->address() + (i * tile_bytes);
+        uint64_t expected_output_addr = output_dram_buffer->address() + (i * tile_bytes);
+        log_info(
+            tt::LogTest,
+            "  Expected tile {} input addr: 0x{:x}, output addr: 0x{:x}",
+            i,
+            expected_input_addr,
+            expected_output_addr);
+    }
+
     log_info(tt::LogTest, "Launching pipeline (operation: struct transformation)...");
 
     // Launch and sync
@@ -149,84 +172,94 @@ int main(int argc, char** argv) {
     std::vector<OutputStruct> result_vec;
     EnqueueReadBuffer(cq, *output_dram_buffer, result_vec, true);
 
-    log_info(
-        tt::LogTest,
-        "Output sample[0]: result={:.2f}, status={}, iterations={}, flags=0x{:02x}",
-        result_vec[0].result_value,
-        result_vec[0].status_code,
-        result_vec[0].iteration_count,
-        result_vec[0].flags);
+    // Enhanced verification with tile-by-tile analysis
+    log_info(tt::LogTest, "Verification by tile:");
 
-    log_info(
-        tt::LogTest,
-        "Output sample[50]: result={:.2f}, status={}, iterations={}, flags=0x{:02x}",
-        result_vec[50].result_value,
-        result_vec[50].status_code,
-        result_vec[50].iteration_count,
-        result_vec[50].flags);
+    uint32_t total_perfect_matches = 0;
+    uint32_t total_mismatches = 0;
 
-    // Detailed pipeline verification
-    uint32_t mismatches = 0;
-    uint32_t perfect_matches = 0;
-    float max_error = 0.0f;
-    float avg_error = 0.0f;
-    const uint32_t max_mismatches_to_show = 10;
+    for (uint32_t tile = 0; tile < num_tiles; tile++) {
+        uint32_t tile_start = tile * elements_per_tile;
+        uint32_t perfect_matches_tile = 0;
+        uint32_t errors_tile = 0;
 
-    for (size_t i = 0; i < input_vec.size(); ++i) {
-        // Expected transformation: result = float_value * 2.0f, status = int_value,
-        // iterations = short_value % 100, flags = char_value & 0xFF
-        float input_val = input_vec[i].float_value;
-        float output_val = result_vec[i].result_value;
-        float expected_val = input_val * 2.0f;  // Simple transformation for verification
-        float error = std::abs(output_val - expected_val);
+        log_info(tt::LogTest, "=== TILE {} ANALYSIS ===", tile);
+        log_info(tt::LogTest, "  Elements {} to {}", tile_start, tile_start + elements_per_tile - 1);
 
-        avg_error += error;
-        max_error = std::max(max_error, error);
+        // Check first few elements of this tile
+        for (uint32_t i = 0; i < 5 && (tile_start + i) < input_vec.size(); i++) {
+            uint32_t idx = tile_start + i;
+            float input_val = input_vec[idx].float_value;
+            float output_val = result_vec[idx].result_value;
+            float expected_val = input_val * 2.0f;
+            bool float_matches = std::abs(output_val - expected_val) <= 1e-3f;
+            bool int_matches = result_vec[idx].status_code == input_vec[idx].int_value;
+            bool short_matches = result_vec[idx].iteration_count == (input_vec[idx].short_value % 100);
+            bool char_matches = result_vec[idx].flags == static_cast<uint8_t>(input_vec[idx].char_value & 0xFF);
+            bool all_match = float_matches && int_matches && short_matches && char_matches;
 
-        // Verify all fields with appropriate tolerances
-        bool float_match = error <= 1e-3f;
-        bool int_match = result_vec[i].status_code == input_vec[i].int_value;
-        bool short_match = result_vec[i].iteration_count == (input_vec[i].short_value % 100);
-        bool char_match = result_vec[i].flags == static_cast<uint8_t>(input_vec[i].char_value & 0xFF);
-
-        bool all_match = float_match && int_match && short_match && char_match;
-
-        if (!all_match) {
-            if (mismatches < max_mismatches_to_show) {
-                log_info(
-                    tt::LogTest,
-                    "Mismatch[{}]: input={:.6f}/{}/{}/{}, output={:.6f}/{}/{}/0x{:02x}",
-                    i,
-                    input_val,
-                    input_vec[i].int_value,
-                    input_vec[i].short_value,
-                    static_cast<int>(input_vec[i].char_value),
-                    output_val,
-                    result_vec[i].status_code,
-                    result_vec[i].iteration_count,
-                    result_vec[i].flags);
-            }
-            mismatches++;
-            pass = false;
-        } else {
-            perfect_matches++;
+            log_info(
+                tt::LogTest,
+                "    [{}]: input={:.2f}/{}/{}/{} -> output={:.2f}/{}/{}/{} (expected={:.2f}/{}/{}/{}) {}",
+                idx,
+                input_val,
+                input_vec[idx].int_value,
+                input_vec[idx].short_value,
+                static_cast<int>(input_vec[idx].char_value),
+                output_val,
+                result_vec[idx].status_code,
+                result_vec[idx].iteration_count,
+                static_cast<int>(result_vec[idx].flags),
+                expected_val,
+                input_vec[idx].int_value,
+                input_vec[idx].short_value % 100,
+                static_cast<int>(input_vec[idx].char_value & 0xFF),
+                all_match ? "✓" : "✗");
         }
+
+        // Count matches for this tile
+        for (uint32_t i = 0; i < elements_per_tile && (tile_start + i) < input_vec.size(); i++) {
+            uint32_t idx = tile_start + i;
+            float input_val = input_vec[idx].float_value;
+            float output_val = result_vec[idx].result_value;
+            float expected_val = input_val * 2.0f;
+
+            bool float_match = std::abs(output_val - expected_val) <= 1e-3f;
+            bool int_match = result_vec[idx].status_code == input_vec[idx].int_value;
+            bool short_match = result_vec[idx].iteration_count == (input_vec[idx].short_value % 100);
+            bool char_match = result_vec[idx].flags == static_cast<uint8_t>(input_vec[idx].char_value & 0xFF);
+
+            if (float_match && int_match && short_match && char_match) {
+                perfect_matches_tile++;
+                total_perfect_matches++;
+            } else {
+                errors_tile++;
+                total_mismatches++;
+            }
+        }
+
+        log_info(
+            tt::LogTest,
+            "  Tile {} results: {} matches, {} errors ({:.1f}% success)",
+            tile,
+            perfect_matches_tile,
+            errors_tile,
+            100.0f * perfect_matches_tile / elements_per_tile);
     }
 
-    avg_error /= input_vec.size();
-
-    // Comprehensive verification report
-    log_info(tt::LogTest, "=== PIPELINE VERIFICATION RESULTS ===");
+    // Overall results
+    log_info(tt::LogTest, "=== OVERALL VERIFICATION RESULTS ===");
     log_info(tt::LogTest, "Total elements processed: {}", input_vec.size());
     log_info(
-        tt::LogTest, "Perfect matches: {} ({:.1f}%)", perfect_matches, 100.0f * perfect_matches / input_vec.size());
-    log_info(tt::LogTest, "Data corruption errors: {} ({:.1f}%)", mismatches, 100.0f * mismatches / input_vec.size());
-    log_info(tt::LogTest, "Maximum error: {:.6f}", max_error);
-    log_info(tt::LogTest, "Average error: {:.6f}", avg_error);
-
-    if (mismatches > max_mismatches_to_show) {
-        log_info(tt::LogTest, "... and {} more mismatches not shown", mismatches - max_mismatches_to_show);
-    }
+        tt::LogTest,
+        "Perfect matches: {} ({:.1f}%)",
+        total_perfect_matches,
+        100.0f * total_perfect_matches / input_vec.size());
+    log_info(
+        tt::LogTest,
+        "Data corruption errors: {} ({:.1f}%)",
+        total_mismatches,
+        100.0f * total_mismatches / input_vec.size());
 
     // Performance and throughput stats
     log_info(tt::LogTest, "=== PERFORMANCE CHARACTERISTICS ===");
@@ -264,7 +297,7 @@ int main(int argc, char** argv) {
         log_info(tt::LogTest, "PASS: Edge case verification (zero values preserved)");
     }
 
-    pass = pass && edge_cases_pass;
+    pass = (total_mismatches == 0) && edge_cases_pass;
 
     log_info(tt::LogTest, "=== FINAL RESULT ===");
     log_info(tt::LogTest, "Overall verification: {}", pass ? "PASS ✓" : "FAIL ✗");
