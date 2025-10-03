@@ -57,6 +57,13 @@ set(SOURCES
     ops/slice_repeat_ops_test.cpp
     ops/binary_ops_test.cpp
     ops/scaled_dot_product_attention_test.cpp
+    ops/gelu_overflow_demo_test.cpp
+    ops/gelu_comprehensive_diagnostic_test.cpp
+    ops/cpu_corruption_isolation_test.cpp
+    ops/clang17_bug_minimal_test.cpp
+    ops/clang17_bug_proof_test.cpp
+    ops/clang17_expression_bug_test.cpp
+    ops/clang17_float_cast_bug_final_test.cpp
 )
 
 add_executable(ttml_tests ${SOURCES})
