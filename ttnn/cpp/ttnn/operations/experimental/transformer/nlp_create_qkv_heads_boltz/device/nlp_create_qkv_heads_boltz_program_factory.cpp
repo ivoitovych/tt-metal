@@ -66,8 +66,9 @@ NlpCreateHeadsBoltzDeviceOperation::Interleaved::create(
     uint32_t q_out_HtWt = q_out_h_tiles * q_out_w_tiles;
     uint32_t q_out_CHtWt = num_q_heads * q_out_HtWt;
     uint32_t kv_out_CHtWt = num_kv_heads * q_out_HtWt;
-    uint32_t q_num_tiles = num_q_heads * q_out_w_tiles;
-    uint32_t kv_num_tiles = num_kv_heads * q_out_w_tiles;
+    // FIX: Use ceiling division to handle head_dim < TILE_WIDTH (32)
+    uint32_t q_num_tiles = (num_q_heads * head_dim + TILE_WIDTH - 1) / TILE_WIDTH;
+    uint32_t kv_num_tiles = (num_kv_heads * head_dim + TILE_WIDTH - 1) / TILE_WIDTH;
 
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     // Block is a unit of work; ie. num of in0_w_tiles per core
