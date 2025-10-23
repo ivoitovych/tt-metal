@@ -21,7 +21,12 @@ namespace ttml::ops {
 // simplified version of layernorm
 // it works only for 4D tensors and for the last dimension
 autograd::TensorPtr layernorm(
-    const autograd::TensorPtr& tensor, const autograd::TensorPtr& gamma, const autograd::TensorPtr& beta) {
+    const autograd::TensorPtr& tensor, const autograd::TensorPtr& gamma, const autograd::TensorPtr& beta, float eps) {
+    // Hardware precision mitigation: bfloat16 has machine epsilon ~0.0078125
+    // Values below ~1e-4 may be truncated to zero, causing NaN in rsqrt
+    // Clamp epsilon to safe minimum for bfloat16 precision
+    const float safe_eps = std::max(eps, 1e-4F);
+
     auto tensor_shape = tensor->get_value().logical_shape();
     auto mean = core::empty(
         ttnn::Shape({tensor_shape[0], tensor_shape[1], tensor_shape[2], 1}),
@@ -33,7 +38,7 @@ autograd::TensorPtr layernorm(
     auto out_tensors = ttnn::moreh_layer_norm(
         tensor->get_value(),
         1,
-        1e-6F,
+        safe_eps,  // Use hardware-safe epsilon
         /* gamma */ gamma->get_value(),
         /* beta */ beta->get_value(),
         output,
@@ -77,7 +82,12 @@ autograd::TensorPtr layernorm(
 }
 
 autograd::TensorPtr composite_layernorm(
-    const autograd::TensorPtr& tensor, const autograd::TensorPtr& gamma, const autograd::TensorPtr& beta) {
+    const autograd::TensorPtr& tensor, const autograd::TensorPtr& gamma, const autograd::TensorPtr& beta, float eps) {
+    // Hardware precision mitigation: bfloat16 has machine epsilon ~0.0078125
+    // Values below ~1e-4 may be truncated to zero, causing NaN in rsqrt
+    // Clamp epsilon to safe minimum for bfloat16 precision
+    const float safe_eps = std::max(eps, 1e-4F);
+
     auto tensor_shape = tensor->get_value().logical_shape();
 
     auto shape = ttnn::Shape({tensor_shape[0], tensor_shape[1], tensor_shape[2], 1});
@@ -103,8 +113,7 @@ autograd::TensorPtr composite_layernorm(
         /* device_compute_kernel_config */ core::ComputeKernelConfig::precise());
     auto variance = ttnn::subtract(mean_squared, ttnn::square(mean));
 
-    const float eps = 1e-6F;
-    auto rstd = ttnn::rsqrt(ttnn::add(variance, eps));
+    auto rstd = ttnn::rsqrt(ttnn::add(variance, safe_eps));
 
     auto normalized_tensor = ttnn::multiply(ttnn::subtract(tensor->get_value(), mean), rstd);
     auto output = ttnn::add(ttnn::multiply(normalized_tensor, gamma->get_value()), beta->get_value());
