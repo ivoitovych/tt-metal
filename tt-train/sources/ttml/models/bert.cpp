@@ -328,7 +328,9 @@ void load_model_from_safetensors(const std::filesystem::path& path, serializatio
             auto float_vec = serialization::SafetensorSerialization::bytes_to_floats_copy(bytes);
 
             // Word embeddings
-            if (info.name == "bert.embeddings.word_embeddings.weight") {
+            // HuggingFace format uses "embeddings.", some other formats may use "bert.embeddings."
+            if (info.name == "bert.embeddings.word_embeddings.weight" ||
+                info.name == "embeddings.word_embeddings.weight") {
                 auto param = get_parameter("bert/token_embeddings/weight");
                 auto padded = pad_vocab_embeddings(
                     float_vec, info.shape[0], info.shape[1], param->get_value().logical_shape()[-2]);
@@ -337,14 +339,28 @@ void load_model_from_safetensors(const std::filesystem::path& path, serializatio
                 fmt::print("  Loaded word embeddings\n");
             }
             // Position embeddings
-            else if (info.name == "bert.embeddings.position_embeddings.weight") {
+            else if (
+                info.name == "bert.embeddings.position_embeddings.weight" ||
+                info.name == "embeddings.position_embeddings.weight") {
                 auto param = get_parameter("bert/position_embeddings/weight");
-                param->set_value(core::from_vector(
-                    float_vec, param->get_value().logical_shape(), param->get_value().device()));
+                auto target_shape = param->get_value().logical_shape();
+                // HF may have more positions than we need, so slice to match our max_sequence_length
+                auto target_rows = target_shape[-2];
+                auto target_cols = target_shape[-1];
+                if (info.shape[0] > target_rows) {
+                    // Slice to take only first target_rows positions
+                    std::vector<float> sliced(static_cast<size_t>(target_rows * target_cols));
+                    std::copy_n(float_vec.begin(), static_cast<size_t>(target_rows * target_cols), sliced.begin());
+                    param->set_value(core::from_vector(sliced, target_shape, param->get_value().device()));
+                } else {
+                    param->set_value(core::from_vector(float_vec, target_shape, param->get_value().device()));
+                }
                 fmt::print("  Loaded position embeddings\n");
             }
             // Token type embeddings
-            else if (info.name == "bert.embeddings.token_type_embeddings.weight") {
+            else if (
+                info.name == "bert.embeddings.token_type_embeddings.weight" ||
+                info.name == "embeddings.token_type_embeddings.weight") {
                 if (parameters.find("bert/token_type_embeddings/weight") != parameters.end()) {
                     auto param = get_parameter("bert/token_type_embeddings/weight");
                     auto padded = pad_vocab_embeddings(
@@ -355,18 +371,19 @@ void load_model_from_safetensors(const std::filesystem::path& path, serializatio
                 }
             }
             // Embedding LayerNorm
-            else if (info.name == "bert.embeddings.LayerNorm.weight") {
+            else if (info.name == "bert.embeddings.LayerNorm.weight" || info.name == "embeddings.LayerNorm.weight") {
                 auto param = get_parameter("bert/embedding_norm/gamma");
                 param->set_value(core::from_vector(
                     float_vec, param->get_value().logical_shape(), param->get_value().device()));
-            }
-            else if (info.name == "bert.embeddings.LayerNorm.bias") {
+                fmt::print("  Loaded embedding LayerNorm weight\n");
+            } else if (info.name == "bert.embeddings.LayerNorm.bias" || info.name == "embeddings.LayerNorm.bias") {
                 auto param = get_parameter("bert/embedding_norm/beta");
                 param->set_value(core::from_vector(
                     float_vec, param->get_value().logical_shape(), param->get_value().device()));
+                fmt::print("  Loaded embedding LayerNorm bias\n");
             }
             // Pooler (if present)
-            else if (info.name == "bert.pooler.dense.weight") {
+            else if (info.name == "bert.pooler.dense.weight" || info.name == "pooler.dense.weight") {
                 if (parameters.find("bert/pooler/weight") != parameters.end()) {
                     auto param = get_parameter("bert/pooler/weight");
                     // Note: HuggingFace stores as [out_features, in_features], we need [1, 1, out_features,
@@ -375,8 +392,7 @@ void load_model_from_safetensors(const std::filesystem::path& path, serializatio
                         float_vec, param->get_value().logical_shape(), param->get_value().device()));
                     fmt::print("  Loaded pooler dense weight\n");
                 }
-            }
-            else if (info.name == "bert.pooler.dense.bias") {
+            } else if (info.name == "bert.pooler.dense.bias" || info.name == "pooler.dense.bias") {
                 if (parameters.find("bert/pooler/bias") != parameters.end()) {
                     auto param = get_parameter("bert/pooler/bias");
                     param->set_value(core::from_vector(
@@ -384,13 +400,12 @@ void load_model_from_safetensors(const std::filesystem::path& path, serializatio
                     fmt::print("  Loaded pooler dense bias\n");
                 }
             }
-
             // Process encoder layers
             // Check if this is an encoder layer parameter
             // HuggingFace format uses "encoder.layer.", some other formats may use "bert.encoder.layer."
-            bool is_encoder_layer =
-                info.name.starts_with("encoder.layer.") || info.name.starts_with("bert.encoder.layer.");
-            if (is_encoder_layer) {
+            else if (info.name.starts_with("encoder.layer.") || info.name.starts_with("bert.encoder.layer.")) {
+                // Encoder layer processing
+                bool is_encoder_layer = true;
                 // Extract layer index
                 std::string prefix = info.name.starts_with("bert.") ? "bert.encoder.layer." : "encoder.layer.";
                 size_t layer_start = prefix.length();
@@ -427,12 +442,14 @@ void load_model_from_safetensors(const std::filesystem::path& path, serializatio
                     auto param = get_parameter(param_name);
                     param->set_value(
                         core::from_vector(float_vec, param->get_value().logical_shape(), param->get_value().device()));
+                    fmt::print("  Loaded attention output weight for layer {}\n", layer_idx);
                 } else if (layer_suffix == "attention.output.dense.bias") {
                     auto param_name =
                         fmt::format("bert/bert_block_{}/attention/self_attention/out_linear/bias", layer_idx);
                     auto param = get_parameter(param_name);
                     param->set_value(
                         core::from_vector(float_vec, param->get_value().logical_shape(), param->get_value().device()));
+                    fmt::print("  Loaded attention output bias for layer {}\n", layer_idx);
                 }
                 // Attention LayerNorm
                 else if (layer_suffix == "attention.output.LayerNorm.weight") {
@@ -440,11 +457,13 @@ void load_model_from_safetensors(const std::filesystem::path& path, serializatio
                     auto param = get_parameter(param_name);
                     param->set_value(
                         core::from_vector(float_vec, param->get_value().logical_shape(), param->get_value().device()));
+                    fmt::print("  Loaded attention LayerNorm weight for layer {}\n", layer_idx);
                 } else if (layer_suffix == "attention.output.LayerNorm.bias") {
                     auto param_name = fmt::format("bert/bert_block_{}/attention_norm/beta", layer_idx);
                     auto param = get_parameter(param_name);
                     param->set_value(
                         core::from_vector(float_vec, param->get_value().logical_shape(), param->get_value().device()));
+                    fmt::print("  Loaded attention LayerNorm bias for layer {}\n", layer_idx);
                 }
                 // MLP intermediate (up projection)
                 else if (layer_suffix == "intermediate.dense.weight") {
@@ -452,11 +471,13 @@ void load_model_from_safetensors(const std::filesystem::path& path, serializatio
                     auto param = get_parameter(param_name);
                     param->set_value(
                         core::from_vector(float_vec, param->get_value().logical_shape(), param->get_value().device()));
+                    fmt::print("  Loaded intermediate dense weight for layer {}\n", layer_idx);
                 } else if (layer_suffix == "intermediate.dense.bias") {
                     auto param_name = fmt::format("bert/bert_block_{}/mlp/dense/bias", layer_idx);
                     auto param = get_parameter(param_name);
                     param->set_value(
                         core::from_vector(float_vec, param->get_value().logical_shape(), param->get_value().device()));
+                    fmt::print("  Loaded intermediate dense bias for layer {}\n", layer_idx);
                 }
                 // MLP output (down projection)
                 else if (layer_suffix == "output.dense.weight") {
@@ -464,11 +485,13 @@ void load_model_from_safetensors(const std::filesystem::path& path, serializatio
                     auto param = get_parameter(param_name);
                     param->set_value(
                         core::from_vector(float_vec, param->get_value().logical_shape(), param->get_value().device()));
+                    fmt::print("  Loaded output dense weight for layer {}\n", layer_idx);
                 } else if (layer_suffix == "output.dense.bias") {
                     auto param_name = fmt::format("bert/bert_block_{}/mlp/output/bias", layer_idx);
                     auto param = get_parameter(param_name);
                     param->set_value(
                         core::from_vector(float_vec, param->get_value().logical_shape(), param->get_value().device()));
+                    fmt::print("  Loaded output dense bias for layer {}\n", layer_idx);
                 }
                 // Output LayerNorm
                 else if (layer_suffix == "output.LayerNorm.weight") {
@@ -476,11 +499,13 @@ void load_model_from_safetensors(const std::filesystem::path& path, serializatio
                     auto param = get_parameter(param_name);
                     param->set_value(
                         core::from_vector(float_vec, param->get_value().logical_shape(), param->get_value().device()));
+                    fmt::print("  Loaded output LayerNorm weight for layer {}\n", layer_idx);
                 } else if (layer_suffix == "output.LayerNorm.bias") {
                     auto param_name = fmt::format("bert/bert_block_{}/mlp_norm/beta", layer_idx);
                     auto param = get_parameter(param_name);
                     param->set_value(
                         core::from_vector(float_vec, param->get_value().logical_shape(), param->get_value().device()));
+                    fmt::print("  Loaded output LayerNorm bias for layer {}\n", layer_idx);
                 }
             }
 
