@@ -70,6 +70,7 @@ def get_hf_bert_output(model, input_ids, token_type_ids=None):
     "model_name",
     [
         "prajjwal1/bert-tiny",  # 2 layers, 128 hidden, 2 heads - small and fast
+        "bert-base-uncased",  # 12 layers, 768 hidden, 12 heads - standard BERT
     ],
 )
 @pytest.mark.parametrize(
