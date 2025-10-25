@@ -48,18 +48,24 @@ autograd::TensorPtr BertAttention::operator()(
 BertBlock::BertBlock(const BertBlockConfig& config) {
     m_attention = std::make_shared<BertAttention>(config.embedding_dim, config.num_heads, config.dropout_prob);
 
+    // Disable hardware clamping to use BERT's exact epsilon (1e-12) instead of clamped value (1e-4)
+    // BERT requires precise epsilon matching for accurate inference results
     m_attention_norm = std::make_shared<LayerNormLayer>(
         config.embedding_dim,
         config.layer_norm_eps,  // Pass BERT's epsilon (typically 1e-12)
-        false                   // use_composite_op = false
+        false,                  // use_composite_op = false
+        false                   // enable_hardware_clamp = false (use exact epsilon)
     );
 
     m_mlp = std::make_shared<BertMLP>(config.embedding_dim, config.intermediate_size, config.dropout_prob);
 
+    // Disable hardware clamping to use BERT's exact epsilon (1e-12) instead of clamped value (1e-4)
+    // BERT requires precise epsilon matching for accurate inference results
     m_mlp_norm = std::make_shared<LayerNormLayer>(
         config.embedding_dim,
         config.layer_norm_eps,  // Pass BERT's epsilon (typically 1e-12)
-        false                   // use_composite_op = false
+        false,                  // use_composite_op = false
+        false                   // enable_hardware_clamp = false (use exact epsilon)
     );
 
     create_name("bert_block");
