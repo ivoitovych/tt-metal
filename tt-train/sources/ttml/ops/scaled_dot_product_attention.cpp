@@ -157,13 +157,15 @@ autograd::TensorPtr scaled_dot_product_attention(
 
     if (mask) {
         auto mask_tensor = mask->get_value();
-        // ttnn::where when mask is not of the same shape as qk_scaled
-        // Fix: Use -1e9F (negative) to suppress masked positions, not +1e9F which boosts them
+        // Apply attention mask: where mask=0 (padding), set to -1e9 to suppress attention
+        // Formula: qk_masked = mask * qk_scaled + (mask - 1) * (1e9)
+        //   - Where mask=1 (real tokens): 1 * qk + 0 * (1e9) = qk
+        //   - Where mask=0 (padding):     0 * qk + (-1) * (1e9) = -1e9
         qk_scaled = ttnn::add(
             ttnn::multiply(mask_tensor, qk_scaled, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
             ttnn::multiply(
                 ttnn::subtract(mask_tensor, 1.F, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
-                -1e9F,  // Changed from 1e9F to -1e9F to properly mask padding tokens
+                1e9F,  // Note: (mask-1) is negative where mask=0, so this produces -1e9
                 std::nullopt,
                 std::nullopt,
                 std::nullopt,

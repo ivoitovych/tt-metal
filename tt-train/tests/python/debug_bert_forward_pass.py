@@ -182,7 +182,8 @@ def debug_bert_forward_pass(model_name="prajjwal1/bert-tiny", test_text="The qui
     attention_mask_ttml = ttml.autograd.Tensor.from_numpy(attention_mask_np.reshape(1, 1, 1, 32))
 
     # CRITICAL: Pass attention mask to TTML model
-    ttml_output = ttml_model(input_ids_ttml, token_type_ids_ttml, attention_mask_ttml)
+    # Parameter order: input_ids, attention_mask, token_type_ids
+    ttml_output = ttml_model(input_ids_ttml, attention_mask_ttml, token_type_ids_ttml)
     ttml_final = ttml_output.to_numpy().reshape(1, 32, hf_config.hidden_size)
 
     compare_outputs("FINAL OUTPUT (WITH PROPER MASKING)", hf_final, ttml_final, threshold=0.95)

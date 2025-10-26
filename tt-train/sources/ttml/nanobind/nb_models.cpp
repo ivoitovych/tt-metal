@@ -133,6 +133,16 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
                 models::bert::load_model_from_safetensors(path, params);
             },
             "Load model weights from safetensors file");
+        // Add three-parameter operator() for BERT-specific forward pass with attention mask
+        py_bert.def(
+            "__call__",
+            static_cast<autograd::TensorPtr (models::bert::Bert::*)(
+                const autograd::TensorPtr&, const autograd::TensorPtr&, const autograd::TensorPtr&)>(
+                &models::bert::Bert::operator()),
+            nb::arg("input_ids"),
+            nb::arg("attention_mask"),
+            nb::arg("token_type_ids"),
+            "BERT forward pass with input_ids, attention_mask, and token_type_ids");
     }
 
     {
