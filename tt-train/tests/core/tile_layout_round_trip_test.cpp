@@ -207,11 +207,11 @@ TEST(TileLayoutRoundTripTest, RandomDataPreserved) {
 
 /**
  * Test: Structured data should survive round-trip through TILE layout
- * BUG: This test currently FAILS - structured data gets scrambled
+ * FIXED: Bug was in Python bindings (non-contiguous arrays), not TILE layout
  */
 TEST(TileLayoutRoundTripTest, StructuredDataPreserved) {
     std::cout << "\n################################################################################\n";
-    std::cout << "TEST: Structured Data Round-Trip (Exposes Bug)\n";
+    std::cout << "TEST: Structured Data Round-Trip (Verifies TILE layout works)\n";
     std::cout << "################################################################################\n";
 
     // Same shape as random data test
@@ -233,25 +233,14 @@ TEST(TileLayoutRoundTripTest, StructuredDataPreserved) {
 
     float pcc = compute_pcc(structured_data, structured_round_trip);
 
-    if (pcc < threshold) {
-        std::cout << "\n⚠️  BUG REPRODUCED!\n";
-        std::cout << "Structured data was scrambled during TILE layout conversion.\n";
-        std::cout << "Expected PCC >= " << threshold << ", got PCC = " << pcc << "\n";
-        std::cout << "\nThis demonstrates the bug where tilize/untilize operations\n";
-        std::cout << "preserve random data but scramble structured data.\n";
-    }
-
-    // For now, we expect this to fail (demonstrating the bug)
-    // Once the bug is fixed, change EXPECT_LT to EXPECT_GE
-    EXPECT_LT(pcc, threshold) << "BUG: Structured data gets scrambled (expected until bug is fixed)";
-
-    // Uncomment this line once the bug is fixed:
-    // EXPECT_GE(pcc, threshold) << "Structured data should be preserved through TILE layout conversion";
+    // Bug was fixed - it was in Python bindings handling non-contiguous arrays,
+    // not in the C++ TILE layout operations themselves
+    EXPECT_GE(pcc, threshold) << "Structured data should be preserved through TILE layout conversion";
 }
 
 /**
  * Test: Compare random vs structured data corruption
- * This clearly shows the differential effect
+ * FIXED: Both types of data now preserve well (bug was in Python bindings)
  */
 TEST(TileLayoutRoundTripTest, CompareRandomVsStructured) {
     std::cout << "\n################################################################################\n";
@@ -276,14 +265,10 @@ TEST(TileLayoutRoundTripTest, CompareRandomVsStructured) {
     float pcc_ratio = random_pcc / std::max(structured_pcc, 0.001F);
     std::cout << "\nPCC ratio (random/structured): " << pcc_ratio << "x\n";
 
-    if (pcc_ratio > 2.0F) {
-        std::cout << "\n⚠️  SIGNIFICANT DIFFERENTIAL CORRUPTION DETECTED!\n";
-        std::cout << "Random data is " << pcc_ratio << "x better preserved than structured data.\n";
-        std::cout << "This proves the bug is in TILE layout conversion, not general precision loss.\n";
-    }
-
-    // The bug manifests as a large PCC ratio
-    EXPECT_GT(pcc_ratio, 2.0F) << "Bug: Structured data should be significantly more corrupted than random data";
+    // Bug was fixed - both random and structured data should preserve well
+    EXPECT_GE(random_pcc, 0.99F) << "Random data should be preserved";
+    EXPECT_GE(structured_pcc, 0.99F) << "Structured data should be preserved";
+    EXPECT_LT(pcc_ratio, 1.1F) << "PCC ratio should be close to 1.0 (both preserve equally well)";
 }
 
 /**
