@@ -80,10 +80,17 @@ def debug_bert_forward_pass(model_name="prajjwal1/bert-tiny", test_text="The qui
     # Tokenize
     encoded = tokenizer(test_text, return_tensors="pt", padding="max_length", max_length=32, truncation=True)
     input_ids = encoded["input_ids"]
+    attention_mask = encoded["attention_mask"]  # CRITICAL: Extract attention mask
     token_type_ids = torch.zeros_like(input_ids)
 
     print(f"Input IDs shape: {input_ids.shape}")
     print(f"Input IDs: {input_ids[0, :10].tolist()}")
+    print(f"Attention mask: {attention_mask[0, :10].tolist()}")
+    num_real_tokens = attention_mask.sum().item()
+    num_padding = (attention_mask == 0).sum().item()
+    print(
+        f"Real tokens: {num_real_tokens}, Padding tokens: {num_padding} ({num_padding/(num_real_tokens+num_padding)*100:.1f}% padding)"
+    )
 
     # Load TTML model
     print(f"\nLoading TTML model...")
@@ -157,24 +164,32 @@ def debug_bert_forward_pass(model_name="prajjwal1/bert-tiny", test_text="The qui
     # ========================================================================
 
     print(f"\n{'█'*80}")
-    print(f"STEP 3: FULL FORWARD PASS")
+    print(f"STEP 3: FULL FORWARD PASS (WITH ATTENTION MASK)")
     print(f"{'█'*80}")
 
     with torch.no_grad():
-        hf_output = hf_model(input_ids=input_ids, token_type_ids=token_type_ids)
+        # CRITICAL FIX: Pass attention_mask to properly handle padding!
+        hf_output = hf_model(input_ids=input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids)
         hf_final = hf_output.last_hidden_state.numpy()
 
     # TTML forward pass
     input_ids_np = input_ids.numpy().astype(np.float32)
     token_type_ids_np = token_type_ids.numpy().astype(np.float32)
+    attention_mask_np = attention_mask.numpy().astype(np.float32)
 
     input_ids_ttml = ttml.autograd.Tensor.from_numpy(input_ids_np.reshape(1, 1, 1, 32))
     token_type_ids_ttml = ttml.autograd.Tensor.from_numpy(token_type_ids_np.reshape(1, 1, 1, 32))
+    attention_mask_ttml = ttml.autograd.Tensor.from_numpy(attention_mask_np.reshape(1, 1, 1, 32))
 
-    ttml_output = ttml_model(input_ids_ttml, token_type_ids_ttml)
+    # CRITICAL: Pass attention mask to TTML model
+    ttml_output = ttml_model(input_ids_ttml, token_type_ids_ttml, attention_mask_ttml)
     ttml_final = ttml_output.to_numpy().reshape(1, 32, hf_config.hidden_size)
 
-    compare_outputs("FINAL OUTPUT", hf_final, ttml_final, threshold=0.95)
+    compare_outputs("FINAL OUTPUT (WITH PROPER MASKING)", hf_final, ttml_final, threshold=0.95)
+
+    print(f"\n⚠️  NOTE: This test now properly uses attention masks to ignore padding tokens.")
+    print(f"   Previous tests without masks were comparing WRONG outputs (both models)")
+    print(f"   attended to padding, making bugs less visible.")
 
     # ========================================================================
     # Step 4: Check specific components
