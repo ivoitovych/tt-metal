@@ -24,6 +24,7 @@
 #include <random>
 #include <vector>
 
+#include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/layernorm_op.hpp"
@@ -156,8 +157,8 @@ TEST_F(BERTOperatorTest, HeadsCreation) {
     auto qkv_data = create_random_data(batch_size * 1 * seq_len * hidden_dim * 3);
 
     // Create TTML tensor
-    auto qkv_tensor =
-        core::from_vector(qkv_data, core::create_shape({batch_size, 1, seq_len, hidden_dim * 3}), core::get_device());
+    auto qkv_tensor = core::from_vector(
+        qkv_data, ttnn::Shape({batch_size, 1, seq_len, hidden_dim * 3}), &autograd::ctx().get_device());
     auto qkv = autograd::create_tensor(qkv_tensor);
 
     // Call heads_creation
@@ -250,7 +251,7 @@ TEST_F(BERTOperatorTest, HeadsFusion) {
 
     // Create TTML tensor
     auto heads_tensor = core::from_vector(
-        heads_data, core::create_shape({batch_size, num_heads, seq_len, head_dim}), core::get_device());
+        heads_data, ttnn::Shape({batch_size, num_heads, seq_len, head_dim}), &autograd::ctx().get_device());
     auto heads = autograd::create_tensor(heads_tensor);
 
     // Call heads_fusion
@@ -308,12 +309,12 @@ TEST_F(BERTOperatorTest, ScaledDotProductAttention) {
     auto v_data = create_random_data(batch_size * num_heads * seq_len * head_dim, 0.0F, 1.0F, 44);
 
     // Create TTML tensors
-    auto q_tensor =
-        core::from_vector(q_data, core::create_shape({batch_size, num_heads, seq_len, head_dim}), core::get_device());
-    auto k_tensor =
-        core::from_vector(k_data, core::create_shape({batch_size, num_heads, seq_len, head_dim}), core::get_device());
-    auto v_tensor =
-        core::from_vector(v_data, core::create_shape({batch_size, num_heads, seq_len, head_dim}), core::get_device());
+    auto q_tensor = core::from_vector(
+        q_data, ttnn::Shape({batch_size, num_heads, seq_len, head_dim}), &autograd::ctx().get_device());
+    auto k_tensor = core::from_vector(
+        k_data, ttnn::Shape({batch_size, num_heads, seq_len, head_dim}), &autograd::ctx().get_device());
+    auto v_tensor = core::from_vector(
+        v_data, ttnn::Shape({batch_size, num_heads, seq_len, head_dim}), &autograd::ctx().get_device());
 
     auto q = autograd::create_tensor(q_tensor);
     auto k = autograd::create_tensor(k_tensor);
@@ -377,9 +378,10 @@ TEST_F(BERTOperatorTest, LayerNorm) {
 
     // Create TTML tensors
     auto input_tensor =
-        core::from_vector(input_data, core::create_shape({batch_size, 1, seq_len, hidden_dim}), core::get_device());
-    auto gamma_tensor = core::from_vector(gamma_data, core::create_shape({1, 1, 1, hidden_dim}), core::get_device());
-    auto beta_tensor = core::from_vector(beta_data, core::create_shape({1, 1, 1, hidden_dim}), core::get_device());
+        core::from_vector(input_data, ttnn::Shape({batch_size, 1, seq_len, hidden_dim}), &autograd::ctx().get_device());
+    auto gamma_tensor =
+        core::from_vector(gamma_data, ttnn::Shape({1, 1, 1, hidden_dim}), &autograd::ctx().get_device());
+    auto beta_tensor = core::from_vector(beta_data, ttnn::Shape({1, 1, 1, hidden_dim}), &autograd::ctx().get_device());
 
     auto input = autograd::create_tensor(input_tensor);
     auto gamma = autograd::create_tensor(gamma_tensor);
@@ -424,7 +426,7 @@ TEST_F(BERTOperatorTest, GELU) {
 
     // Create TTML tensor
     auto input_tensor =
-        core::from_vector(input_data, core::create_shape({batch_size, 1, seq_len, hidden_dim}), core::get_device());
+        core::from_vector(input_data, ttnn::Shape({batch_size, 1, seq_len, hidden_dim}), &autograd::ctx().get_device());
     auto input = autograd::create_tensor(input_tensor);
 
     // Call GELU
@@ -486,13 +488,14 @@ TEST_F(BERTOperatorTest, CompleteMHAPipeline) {
 
     // Create TTML tensors
     auto input_tensor =
-        core::from_vector(input_data, core::create_shape({batch_size, 1, seq_len, hidden_dim}), core::get_device());
+        core::from_vector(input_data, ttnn::Shape({batch_size, 1, seq_len, hidden_dim}), &autograd::ctx().get_device());
     auto qkv_weight_tensor =
-        core::from_vector(qkv_weight_data, core::create_shape({hidden_dim * 3, hidden_dim}), core::get_device());
-    auto qkv_bias_tensor = core::from_vector(qkv_bias_data, core::create_shape({hidden_dim * 3}), core::get_device());
+        core::from_vector(qkv_weight_data, ttnn::Shape({hidden_dim * 3, hidden_dim}), &autograd::ctx().get_device());
+    auto qkv_bias_tensor =
+        core::from_vector(qkv_bias_data, ttnn::Shape({hidden_dim * 3}), &autograd::ctx().get_device());
     auto out_weight_tensor =
-        core::from_vector(out_weight_data, core::create_shape({hidden_dim, hidden_dim}), core::get_device());
-    auto out_bias_tensor = core::from_vector(out_bias_data, core::create_shape({hidden_dim}), core::get_device());
+        core::from_vector(out_weight_data, ttnn::Shape({hidden_dim, hidden_dim}), &autograd::ctx().get_device());
+    auto out_bias_tensor = core::from_vector(out_bias_data, ttnn::Shape({hidden_dim}), &autograd::ctx().get_device());
 
     auto input = autograd::create_tensor(input_tensor);
     auto qkv_weight = autograd::create_tensor(qkv_weight_tensor);
@@ -536,4 +539,351 @@ TEST_F(BERTOperatorTest, CompleteMHAPipeline) {
     EXPECT_FALSE(has_nan_inf) << "MHA pipeline output contains NaN or Inf values";
 
     std::cout << "Complete MHA pipeline test passed - all operations executed successfully\n";
+}
+
+/**
+ * Reference implementation of softmax for validation
+ */
+std::vector<float> reference_softmax(const std::vector<float>& input, size_t last_dim_size) {
+    std::vector<float> output(input.size());
+    size_t num_rows = input.size() / last_dim_size;
+
+    for (size_t row = 0; row < num_rows; ++row) {
+        size_t offset = row * last_dim_size;
+
+        // Find max for numerical stability
+        float max_val = input[offset];
+        for (size_t i = 1; i < last_dim_size; ++i) {
+            max_val = std::max(max_val, input[offset + i]);
+        }
+
+        // Compute exp and sum
+        float sum = 0.0F;
+        for (size_t i = 0; i < last_dim_size; ++i) {
+            output[offset + i] = std::exp(input[offset + i] - max_val);
+            sum += output[offset + i];
+        }
+
+        // Normalize
+        for (size_t i = 0; i < last_dim_size; ++i) {
+            output[offset + i] /= sum;
+        }
+    }
+
+    return output;
+}
+
+/**
+ * Reference implementation of attention for validation
+ * Computes: softmax(Q @ K^T / sqrt(d_k)) @ V
+ */
+std::vector<float> reference_attention(
+    const std::vector<float>& q_data,
+    const std::vector<float>& k_data,
+    const std::vector<float>& v_data,
+    uint32_t batch_size,
+    uint32_t num_heads,
+    uint32_t seq_len,
+    uint32_t head_dim,
+    const std::vector<float>* mask_data = nullptr) {
+    float scale = 1.0F / std::sqrt(static_cast<float>(head_dim));
+
+    // Compute Q @ K^T for each batch and head
+    std::vector<float> attn_scores(batch_size * num_heads * seq_len * seq_len, 0.0F);
+
+    for (uint32_t b = 0; b < batch_size; ++b) {
+        for (uint32_t h = 0; h < num_heads; ++h) {
+            for (uint32_t i = 0; i < seq_len; ++i) {
+                for (uint32_t j = 0; j < seq_len; ++j) {
+                    float sum = 0.0F;
+                    for (uint32_t d = 0; d < head_dim; ++d) {
+                        size_t q_idx = b * num_heads * seq_len * head_dim + h * seq_len * head_dim + i * head_dim + d;
+                        size_t k_idx = b * num_heads * seq_len * head_dim + h * seq_len * head_dim + j * head_dim + d;
+                        sum += q_data[q_idx] * k_data[k_idx];
+                    }
+                    size_t score_idx = b * num_heads * seq_len * seq_len + h * seq_len * seq_len + i * seq_len + j;
+                    attn_scores[score_idx] = sum * scale;
+                }
+            }
+        }
+    }
+
+    // Apply mask if provided (mask format: 1 = attend, 0 = mask out)
+    if (mask_data != nullptr) {
+        for (uint32_t b = 0; b < batch_size; ++b) {
+            for (uint32_t h = 0; h < num_heads; ++h) {
+                for (uint32_t i = 0; i < seq_len; ++i) {
+                    for (uint32_t j = 0; j < seq_len; ++j) {
+                        // Mask is [B, 1, 1, S] - broadcast across heads and query positions
+                        size_t mask_idx = b * seq_len + j;
+                        float mask_val = (*mask_data)[mask_idx];
+
+                        if (mask_val == 0.0F) {
+                            size_t score_idx =
+                                b * num_heads * seq_len * seq_len + h * seq_len * seq_len + i * seq_len + j;
+                            attn_scores[score_idx] = -1e9F;  // Large negative value
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Apply softmax
+    auto attn_weights = reference_softmax(attn_scores, seq_len);
+
+    // Compute attn_weights @ V
+    std::vector<float> output(batch_size * num_heads * seq_len * head_dim, 0.0F);
+
+    for (uint32_t b = 0; b < batch_size; ++b) {
+        for (uint32_t h = 0; h < num_heads; ++h) {
+            for (uint32_t i = 0; i < seq_len; ++i) {
+                for (uint32_t d = 0; d < head_dim; ++d) {
+                    float sum = 0.0F;
+                    for (uint32_t j = 0; j < seq_len; ++j) {
+                        size_t weight_idx = b * num_heads * seq_len * seq_len + h * seq_len * seq_len + i * seq_len + j;
+                        size_t v_idx = b * num_heads * seq_len * head_dim + h * seq_len * head_dim + j * head_dim + d;
+                        sum += attn_weights[weight_idx] * v_data[v_idx];
+                    }
+                    size_t out_idx = b * num_heads * seq_len * head_dim + h * seq_len * head_dim + i * head_dim + d;
+                    output[out_idx] = sum;
+                }
+            }
+        }
+    }
+
+    return output;
+}
+
+/**
+ * Test scaled_dot_product_attention WITH REFERENCE COMPARISON (no mask)
+ *
+ * This addresses deficiency #2: "They don't compare against a reference"
+ */
+TEST_F(BERTOperatorTest, ScaledDotProductAttentionWithReference) {
+    std::cout << "\n" << std::string(80, '=') << "\n";
+    std::cout << "TEST: Scaled Dot-Product Attention (with reference comparison)\n";
+    std::cout << std::string(80, '=') << "\n";
+
+    // Create random Q, K, V [B, H, S, E/H]
+    auto q_data = create_random_data(batch_size * num_heads * seq_len * head_dim, 0.0F, 1.0F, 42);
+    auto k_data = create_random_data(batch_size * num_heads * seq_len * head_dim, 0.0F, 1.0F, 43);
+    auto v_data = create_random_data(batch_size * num_heads * seq_len * head_dim, 0.0F, 1.0F, 44);
+
+    // Compute reference output
+    auto expected = reference_attention(q_data, k_data, v_data, batch_size, num_heads, seq_len, head_dim);
+
+    // Create TTML tensors
+    auto q_tensor = core::from_vector(
+        q_data, ttnn::Shape({batch_size, num_heads, seq_len, head_dim}), &autograd::ctx().get_device());
+    auto k_tensor = core::from_vector(
+        k_data, ttnn::Shape({batch_size, num_heads, seq_len, head_dim}), &autograd::ctx().get_device());
+    auto v_tensor = core::from_vector(
+        v_data, ttnn::Shape({batch_size, num_heads, seq_len, head_dim}), &autograd::ctx().get_device());
+
+    auto q = autograd::create_tensor(q_tensor);
+    auto k = autograd::create_tensor(k_tensor);
+    auto v = autograd::create_tensor(v_tensor);
+
+    // Call TTML scaled_dot_product_attention (NO MASK)
+    auto output = ops::scaled_dot_product_attention(q, k, v);
+
+    // Get actual output
+    auto actual = core::to_vector(output->get_value());
+
+    // Compare with reference using PCC
+    print_comparison("Attention (No Mask)", expected, actual, 0.99F);
+}
+
+/**
+ * Test scaled_dot_product_attention WITH MASK AND REFERENCE
+ *
+ * This addresses deficiency #1: "They don't test masked attention at all"
+ * This addresses deficiency #2: "They don't compare against a reference"
+ * This addresses deficiency #3: "They only do sanity checks"
+ */
+TEST_F(BERTOperatorTest, ScaledDotProductAttentionWithMaskAndReference) {
+    std::cout << "\n" << std::string(80, '=') << "\n";
+    std::cout << "TEST: Scaled Dot-Product Attention WITH MASK (reference comparison)\n";
+    std::cout << std::string(80, '=') << "\n";
+
+    // Create random Q, K, V [B, H, S, E/H]
+    auto q_data = create_random_data(batch_size * num_heads * seq_len * head_dim, 0.0F, 1.0F, 42);
+    auto k_data = create_random_data(batch_size * num_heads * seq_len * head_dim, 0.0F, 1.0F, 43);
+    auto v_data = create_random_data(batch_size * num_heads * seq_len * head_dim, 0.0F, 1.0F, 44);
+
+    // Create attention mask [B, 1, 1, S] - mask out last 8 positions
+    std::vector<float> mask_data(batch_size * 1 * 1 * seq_len, 1.0F);
+    for (uint32_t b = 0; b < batch_size; ++b) {
+        for (uint32_t s = seq_len - 8; s < seq_len; ++s) {
+            mask_data[b * seq_len + s] = 0.0F;  // 0 = mask out
+        }
+    }
+
+    // Compute reference output WITH MASK
+    auto expected = reference_attention(q_data, k_data, v_data, batch_size, num_heads, seq_len, head_dim, &mask_data);
+
+    // Create TTML tensors
+    auto q_tensor = core::from_vector(
+        q_data, ttnn::Shape({batch_size, num_heads, seq_len, head_dim}), &autograd::ctx().get_device());
+    auto k_tensor = core::from_vector(
+        k_data, ttnn::Shape({batch_size, num_heads, seq_len, head_dim}), &autograd::ctx().get_device());
+    auto v_tensor = core::from_vector(
+        v_data, ttnn::Shape({batch_size, num_heads, seq_len, head_dim}), &autograd::ctx().get_device());
+    auto mask_tensor =
+        core::from_vector(mask_data, ttnn::Shape({batch_size, 1, 1, seq_len}), &autograd::ctx().get_device());
+
+    auto q = autograd::create_tensor(q_tensor);
+    auto k = autograd::create_tensor(k_tensor);
+    auto v = autograd::create_tensor(v_tensor);
+    auto mask = autograd::create_tensor(mask_tensor);
+
+    // Call TTML scaled_dot_product_attention WITH MASK
+    auto output = ops::scaled_dot_product_attention(q, k, v, mask);
+
+    // Get actual output
+    auto actual = core::to_vector(output->get_value());
+
+    // Compare with reference using PCC
+    // THIS IS THE CRITICAL TEST - it will FAIL if masking is broken!
+    print_comparison("Attention (WITH MASK)", expected, actual, 0.99F);
+}
+
+/**
+ * Test that all-ones mask produces same result as no mask
+ *
+ * This validates mask=1 means "attend" (not "mask out")
+ */
+TEST_F(BERTOperatorTest, ScaledDotProductAttentionAllOnesMask) {
+    std::cout << "\n" << std::string(80, '=') << "\n";
+    std::cout << "TEST: Attention with all-ones mask (should match no-mask)\n";
+    std::cout << std::string(80, '=') << "\n";
+
+    // Create random Q, K, V [B, H, S, E/H]
+    auto q_data = create_random_data(batch_size * num_heads * seq_len * head_dim, 0.0F, 1.0F, 42);
+    auto k_data = create_random_data(batch_size * num_heads * seq_len * head_dim, 0.0F, 1.0F, 43);
+    auto v_data = create_random_data(batch_size * num_heads * seq_len * head_dim, 0.0F, 1.0F, 44);
+
+    // All-ones mask (attend to everything)
+    std::vector<float> mask_data(batch_size * 1 * 1 * seq_len, 1.0F);
+
+    // Create TTML tensors
+    auto q_tensor = core::from_vector(
+        q_data, ttnn::Shape({batch_size, num_heads, seq_len, head_dim}), &autograd::ctx().get_device());
+    auto k_tensor = core::from_vector(
+        k_data, ttnn::Shape({batch_size, num_heads, seq_len, head_dim}), &autograd::ctx().get_device());
+    auto v_tensor = core::from_vector(
+        v_data, ttnn::Shape({batch_size, num_heads, seq_len, head_dim}), &autograd::ctx().get_device());
+    auto mask_tensor =
+        core::from_vector(mask_data, ttnn::Shape({batch_size, 1, 1, seq_len}), &autograd::ctx().get_device());
+
+    auto q = autograd::create_tensor(q_tensor);
+    auto k = autograd::create_tensor(k_tensor);
+    auto v = autograd::create_tensor(v_tensor);
+    auto mask = autograd::create_tensor(mask_tensor);
+
+    // Run with no mask
+    auto output_no_mask = ops::scaled_dot_product_attention(q, k, v);
+    auto no_mask_result = core::to_vector(output_no_mask->get_value());
+
+    // Run with all-ones mask
+    auto output_with_mask = ops::scaled_dot_product_attention(q, k, v, mask);
+    auto with_mask_result = core::to_vector(output_with_mask->get_value());
+
+    // They should be identical (or very close)
+    print_comparison("All-ones mask vs no-mask", no_mask_result, with_mask_result, 0.999F);
+}
+
+/**
+ * Test that all-zeros mask produces valid output
+ *
+ * When everything is masked, softmax should produce uniform weights
+ */
+TEST_F(BERTOperatorTest, ScaledDotProductAttentionAllZerosMask) {
+    std::cout << "\n" << std::string(80, '=') << "\n";
+    std::cout << "TEST: Attention with all-zeros mask\n";
+    std::cout << std::string(80, '=') << "\n";
+
+    // Create random Q, K, V [B, H, S, E/H]
+    auto q_data = create_random_data(batch_size * num_heads * seq_len * head_dim, 0.0F, 1.0F, 42);
+    auto k_data = create_random_data(batch_size * num_heads * seq_len * head_dim, 0.0F, 1.0F, 43);
+    auto v_data = create_random_data(batch_size * num_heads * seq_len * head_dim, 0.0F, 1.0F, 44);
+
+    // All-zeros mask (mask out everything)
+    std::vector<float> mask_data(batch_size * 1 * 1 * seq_len, 0.0F);
+
+    // Compute reference
+    auto expected = reference_attention(q_data, k_data, v_data, batch_size, num_heads, seq_len, head_dim, &mask_data);
+
+    // Create TTML tensors
+    auto q_tensor = core::from_vector(
+        q_data, ttnn::Shape({batch_size, num_heads, seq_len, head_dim}), &autograd::ctx().get_device());
+    auto k_tensor = core::from_vector(
+        k_data, ttnn::Shape({batch_size, num_heads, seq_len, head_dim}), &autograd::ctx().get_device());
+    auto v_tensor = core::from_vector(
+        v_data, ttnn::Shape({batch_size, num_heads, seq_len, head_dim}), &autograd::ctx().get_device());
+    auto mask_tensor =
+        core::from_vector(mask_data, ttnn::Shape({batch_size, 1, 1, seq_len}), &autograd::ctx().get_device());
+
+    auto q = autograd::create_tensor(q_tensor);
+    auto k = autograd::create_tensor(k_tensor);
+    auto v = autograd::create_tensor(v_tensor);
+    auto mask = autograd::create_tensor(mask_tensor);
+
+    // Run with all-zeros mask
+    auto output = ops::scaled_dot_product_attention(q, k, v, mask);
+    auto actual = core::to_vector(output->get_value());
+
+    // Compare with reference
+    print_comparison("All-zeros mask", expected, actual, 0.99F);
+}
+
+/**
+ * Test partial mask (realistic BERT scenario)
+ *
+ * This simulates padding mask where some sequence positions are masked
+ */
+TEST_F(BERTOperatorTest, ScaledDotProductAttentionPartialMask) {
+    std::cout << "\n" << std::string(80, '=') << "\n";
+    std::cout << "TEST: Attention with partial mask (realistic padding scenario)\n";
+    std::cout << std::string(80, '=') << "\n";
+
+    // Create random Q, K, V [B, H, S, E/H]
+    auto q_data = create_random_data(batch_size * num_heads * seq_len * head_dim, 0.0F, 1.0F, 42);
+    auto k_data = create_random_data(batch_size * num_heads * seq_len * head_dim, 0.0F, 1.0F, 43);
+    auto v_data = create_random_data(batch_size * num_heads * seq_len * head_dim, 0.0F, 1.0F, 44);
+
+    // Partial mask: first 24 positions = attend (1), last 8 positions = masked (0)
+    std::vector<float> mask_data(batch_size * 1 * 1 * seq_len);
+    for (uint32_t b = 0; b < batch_size; ++b) {
+        for (uint32_t s = 0; s < seq_len; ++s) {
+            mask_data[b * seq_len + s] = (s < 24) ? 1.0F : 0.0F;
+        }
+    }
+
+    // Compute reference
+    auto expected = reference_attention(q_data, k_data, v_data, batch_size, num_heads, seq_len, head_dim, &mask_data);
+
+    // Create TTML tensors
+    auto q_tensor = core::from_vector(
+        q_data, ttnn::Shape({batch_size, num_heads, seq_len, head_dim}), &autograd::ctx().get_device());
+    auto k_tensor = core::from_vector(
+        k_data, ttnn::Shape({batch_size, num_heads, seq_len, head_dim}), &autograd::ctx().get_device());
+    auto v_tensor = core::from_vector(
+        v_data, ttnn::Shape({batch_size, num_heads, seq_len, head_dim}), &autograd::ctx().get_device());
+    auto mask_tensor =
+        core::from_vector(mask_data, ttnn::Shape({batch_size, 1, 1, seq_len}), &autograd::ctx().get_device());
+
+    auto q = autograd::create_tensor(q_tensor);
+    auto k = autograd::create_tensor(k_tensor);
+    auto v = autograd::create_tensor(v_tensor);
+    auto mask = autograd::create_tensor(mask_tensor);
+
+    // Run with partial mask
+    auto output = ops::scaled_dot_product_attention(q, k, v, mask);
+    auto actual = core::to_vector(output->get_value());
+
+    // Compare with reference - THIS IS THE MOST IMPORTANT TEST
+    // It simulates real BERT usage with padding masks
+    print_comparison("Partial mask (padding simulation)", expected, actual, 0.99F);
 }
