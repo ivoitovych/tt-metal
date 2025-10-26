@@ -115,8 +115,8 @@ class BERTInferenceShowcase:
 
         print(f"✅ Models ready\n")
 
-    def tokenize_text(self, text: str, max_length: int = 128) -> Tuple[np.ndarray, int]:
-        """Tokenize text and return input_ids and actual token count."""
+    def tokenize_text(self, text: str, max_length: int = 128) -> Tuple[np.ndarray, np.ndarray, int]:
+        """Tokenize text and return input_ids, attention_mask, and actual token count."""
         encoded = self.tokenizer(
             text,
             max_length=max_length,
@@ -125,8 +125,9 @@ class BERTInferenceShowcase:
             return_tensors="pt",
         )
         input_ids = encoded["input_ids"].numpy()
+        attention_mask = encoded["attention_mask"].numpy()
         token_count = (input_ids[0] != self.tokenizer.pad_token_id).sum()
-        return input_ids, int(token_count)
+        return input_ids, attention_mask, int(token_count)
 
     def compute_pcc(self, x: np.ndarray, y: np.ndarray) -> float:
         """Compute Pearson correlation coefficient."""
@@ -141,7 +142,7 @@ class BERTInferenceShowcase:
     def run_inference(self, text: str) -> InferenceComparison:
         """Run both HuggingFace and TTML inference and compare results."""
         # Tokenize
-        input_ids, token_count = self.tokenize_text(text)
+        input_ids, attention_mask, token_count = self.tokenize_text(text)
         batch_size = 1
         seq_len = input_ids.shape[1]
         token_type_ids = np.zeros_like(input_ids)
@@ -149,7 +150,9 @@ class BERTInferenceShowcase:
         # HuggingFace inference
         with torch.no_grad():
             hf_output = self.hf_model(
-                input_ids=torch.from_numpy(input_ids), token_type_ids=torch.from_numpy(token_type_ids)
+                input_ids=torch.from_numpy(input_ids),
+                attention_mask=torch.from_numpy(attention_mask),
+                token_type_ids=torch.from_numpy(token_type_ids),
             )
             hf_embeddings = hf_output.last_hidden_state.numpy()
 
@@ -159,11 +162,15 @@ class BERTInferenceShowcase:
         input_ids_ttml = ttml.autograd.Tensor.from_numpy(
             input_ids.astype(np.float32).reshape(batch_size, 1, 1, seq_len)
         )
+        attention_mask_ttml = ttml.autograd.Tensor.from_numpy(
+            attention_mask.astype(np.float32).reshape(batch_size, 1, 1, seq_len)
+        )
         token_type_ids_ttml = ttml.autograd.Tensor.from_numpy(
             token_type_ids.astype(np.float32).reshape(batch_size, 1, 1, seq_len)
         )
 
-        ttml_output = self.ttml_model(input_ids_ttml, token_type_ids_ttml)
+        # FIXED: Now properly passing attention_mask (parameter order: input_ids, attention_mask, token_type_ids)
+        ttml_output = self.ttml_model(input_ids_ttml, attention_mask_ttml, token_type_ids_ttml)
         ttml_embeddings = ttml_output.to_numpy().reshape(batch_size, seq_len, self.hf_config.hidden_size)
 
         ttml_cls = ttml_embeddings[0, 0, :]  # [CLS] token
