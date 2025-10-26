@@ -90,4 +90,23 @@ autograd::TensorPtr BertBlock::operator()(const autograd::TensorPtr& input, cons
     return mlp_residual;
 }
 
+BertBlock::IntermediateOutputs BertBlock::forward_with_intermediates(
+    const autograd::TensorPtr& input, const autograd::TensorPtr& attention_mask) {
+    IntermediateOutputs outputs;
+
+    // Self-attention with residual connection and layer norm
+    auto attention_output = (*m_attention)(input, attention_mask);
+    auto attention_residual = ops::add(attention_output, input);
+    attention_residual = (*m_attention_norm)(attention_residual);
+    outputs.attention_output = attention_residual;
+
+    // Feed-forward with residual connection and layer norm
+    auto mlp_output = (*m_mlp)(attention_residual);
+    auto mlp_residual = ops::add(mlp_output, attention_residual);
+    mlp_residual = (*m_mlp_norm)(mlp_residual);
+    outputs.block_output = mlp_residual;
+
+    return outputs;
+}
+
 }  // namespace ttml::modules

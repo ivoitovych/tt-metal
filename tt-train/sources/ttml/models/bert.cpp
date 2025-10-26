@@ -268,6 +268,67 @@ autograd::TensorPtr Bert::operator()(
     return forward(input_ids, attention_mask, token_type_ids);
 }
 
+// Forward pass with intermediate outputs for debugging/validation
+Bert::IntermediateOutputs Bert::forward_with_intermediates(
+    const autograd::TensorPtr& input_ids,
+    const autograd::TensorPtr& attention_mask,
+    const autograd::TensorPtr& token_type_ids) {
+    IntermediateOutputs outputs;
+
+    // Process attention mask
+    auto processed_mask = process_attention_mask(attention_mask);
+
+    // Get input embeddings and store
+    auto hidden_states = get_embeddings(input_ids, token_type_ids);
+    outputs.embeddings = hidden_states;
+
+    // Pass through transformer blocks and capture intermediates
+    outputs.block_attention_outputs.reserve(m_blocks.size());
+    outputs.block_outputs.reserve(m_blocks.size());
+
+    for (auto& block : m_blocks) {
+        if (m_runner_type == common::transformer::RunnerType::MemoryEfficient) {
+            // Memory efficient runner doesn't support intermediates, use regular path
+            hidden_states = (*block)(hidden_states, processed_mask);
+            // Store approximations (attention output is same as block output for memory efficient)
+            outputs.block_attention_outputs.push_back(hidden_states);
+            outputs.block_outputs.push_back(hidden_states);
+        } else if (m_runner_type == common::transformer::RunnerType::Default) {
+            // Use forward_with_intermediates to get detailed outputs
+            auto block_intermediates = block->forward_with_intermediates(hidden_states, processed_mask);
+            outputs.block_attention_outputs.push_back(block_intermediates.attention_output);
+            outputs.block_outputs.push_back(block_intermediates.block_output);
+            hidden_states = block_intermediates.block_output;
+        } else {
+            throw std::runtime_error("Unknown runner type. Supported runner types ['default', 'memory_efficient']");
+        }
+    }
+
+    // Optional pooling for classification tasks
+    if (m_pooler) {
+        // Extract [CLS] token representation (first token in sequence)
+        auto hidden_shape = hidden_states->get_shape();
+        auto batch_size = hidden_shape[0];
+        auto embedding_dim = hidden_shape[3];
+
+        ttnn::SmallVector<uint32_t> start_indices = {0, 0, 0, 0};
+        ttnn::SmallVector<uint32_t> end_indices = {batch_size, 1, 1, embedding_dim};
+        ttnn::SmallVector<uint32_t> stride = {1, 1, 1, 1};
+
+        auto cls_token = ttnn::slice(hidden_states->get_value(), start_indices, end_indices, stride);
+
+        auto pooled_output = autograd::create_tensor(cls_token);
+        pooled_output = (*m_pooler)(pooled_output);
+        pooled_output = ops::tanh(pooled_output);
+
+        outputs.final_output = pooled_output;
+    } else {
+        outputs.final_output = hidden_states;
+    }
+
+    return outputs;
+}
+
 void Bert::load_from_safetensors(const std::filesystem::path& model_path) {
     for (const auto& entry : std::filesystem::directory_iterator(model_path)) {
         if (entry.path().extension() == ".safetensors") {

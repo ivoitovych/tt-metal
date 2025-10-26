@@ -143,6 +143,29 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
             nb::arg("attention_mask"),
             nb::arg("token_type_ids"),
             "BERT forward pass with input_ids, attention_mask, and token_type_ids");
+
+        // Bind IntermediateOutputs structure
+        nb::class_<models::bert::Bert::IntermediateOutputs>(py_bert_module, "IntermediateOutputs")
+            .def(nb::init<>())
+            .def_rw("embeddings", &models::bert::Bert::IntermediateOutputs::embeddings, "Embedding layer output")
+            .def_rw(
+                "block_attention_outputs",
+                &models::bert::Bert::IntermediateOutputs::block_attention_outputs,
+                "Attention outputs from each block")
+            .def_rw(
+                "block_outputs",
+                &models::bert::Bert::IntermediateOutputs::block_outputs,
+                "Final output from each block")
+            .def_rw("final_output", &models::bert::Bert::IntermediateOutputs::final_output, "Final model output");
+
+        // Add forward_with_intermediates for layer-by-layer debugging
+        py_bert.def(
+            "forward_with_intermediates",
+            &models::bert::Bert::forward_with_intermediates,
+            nb::arg("input_ids"),
+            nb::arg("attention_mask") = nullptr,
+            nb::arg("token_type_ids") = nullptr,
+            "BERT forward pass that returns all intermediate layer outputs for debugging");
     }
 
     {

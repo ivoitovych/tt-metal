@@ -174,13 +174,18 @@ class ManualBERTValidator:
         # Get TTML output using full forward pass
         input_ids_np = input_ids.numpy().astype(np.float32)
         token_type_ids_np = token_type_ids.numpy().astype(np.float32)
+        # Create attention mask (all ones = no masking)
+        attention_mask_np = np.ones((self.batch_size, self.seq_len), dtype=np.float32)
 
         input_ids_ttml = ttml.autograd.Tensor.from_numpy(input_ids_np.reshape(self.batch_size, 1, 1, self.seq_len))
         token_type_ids_ttml = ttml.autograd.Tensor.from_numpy(
             token_type_ids_np.reshape(self.batch_size, 1, 1, self.seq_len)
         )
+        attention_mask_ttml = ttml.autograd.Tensor.from_numpy(
+            attention_mask_np.reshape(self.batch_size, 1, 1, self.seq_len)
+        )
 
-        ttml_output = self.ttml_model(input_ids_ttml, token_type_ids_ttml)
+        ttml_output = self.ttml_model(input_ids_ttml, attention_mask_ttml, token_type_ids_ttml)
         ttml_final = ttml_output.to_numpy().reshape(self.batch_size, self.seq_len, self.hf_config.hidden_size)
 
         # Compare embeddings (if we could access them from TTML)

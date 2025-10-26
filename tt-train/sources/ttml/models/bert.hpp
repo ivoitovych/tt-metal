@@ -79,6 +79,20 @@ public:
         return m_pooler != nullptr;
     }
 
+    // Intermediate outputs structure for layer-by-layer debugging
+    struct IntermediateOutputs {
+        autograd::TensorPtr embeddings;                            // After embedding layer
+        std::vector<autograd::TensorPtr> block_attention_outputs;  // After each block's attention
+        std::vector<autograd::TensorPtr> block_outputs;            // After each complete block
+        autograd::TensorPtr final_output;                          // Final model output
+    };
+
+    // Forward pass with intermediate outputs for debugging/validation
+    [[nodiscard]] IntermediateOutputs forward_with_intermediates(
+        const autograd::TensorPtr& input_ids,
+        const autograd::TensorPtr& attention_mask = nullptr,
+        const autograd::TensorPtr& token_type_ids = nullptr);
+
 private:
     [[nodiscard]] autograd::TensorPtr get_embeddings(
         const autograd::TensorPtr& input_ids, const autograd::TensorPtr& token_type_ids = nullptr);
