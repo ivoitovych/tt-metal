@@ -93,10 +93,22 @@ public:
         const autograd::TensorPtr& attention_mask = nullptr,
         const autograd::TensorPtr& token_type_ids = nullptr);
 
-private:
+    // Public accessors for isolated layer testing
     [[nodiscard]] autograd::TensorPtr get_embeddings(
         const autograd::TensorPtr& input_ids, const autograd::TensorPtr& token_type_ids = nullptr);
 
+    [[nodiscard]] const std::vector<std::shared_ptr<modules::BertBlock>>& get_blocks() const {
+        return m_blocks;
+    }
+
+    [[nodiscard]] std::shared_ptr<modules::BertBlock> get_block(size_t index) const {
+        if (index >= m_blocks.size()) {
+            throw std::out_of_range("Block index out of range");
+        }
+        return m_blocks[index];
+    }
+
+private:
     [[nodiscard]] autograd::TensorPtr process_attention_mask(const autograd::TensorPtr& attention_mask) const;
 };
 

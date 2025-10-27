@@ -20,8 +20,8 @@ import torch
 from pathlib import Path
 from typing import Dict, List
 
-sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/sources/ttml')
-import ttml  # noqa: E402
+sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/build/sources/ttml')
+import _ttml as ttml  # noqa: E402
 
 transformers = pytest.importorskip("transformers", reason="transformers not installed")
 

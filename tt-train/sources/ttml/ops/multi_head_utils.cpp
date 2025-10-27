@@ -107,32 +107,31 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> heads_
     auto out_k = autograd::create_tensor(k);
     auto out_v = autograd::create_tensor(v);
 
-    autograd::GradFunction grad_q =
-        [out_q, out_k, out_v, qkv, num_heads, batch_size, seq_len, embedding_dim, head_dim]() {
-            auto grad_q = out_q->get_grad();
-            auto grad_k = out_k->get_grad();
-            auto grad_v = out_v->get_grad();
+    autograd::GradFunction grad_q = [out_q, out_k, out_v, qkv, batch_size, seq_len, embedding_dim]() {
+        auto grad_q = out_q->get_grad();
+        auto grad_k = out_k->get_grad();
+        auto grad_v = out_v->get_grad();
 
-            // Reverse the forward transformations: (B, H, S, E/H) -> (B, 1, S, E)
-            // Step 1: Transpose back: [B, H, S, E/H] -> [B, S, H, E/H]
-            grad_q = ttnn::transpose(grad_q, 1, 2);
-            // Step 2: Merge heads: [B, S, H, E/H] -> [B, S, E]
-            grad_q = ttnn::reshape(grad_q, ttnn::Shape{batch_size, seq_len, embedding_dim});
-            // Step 3: Add channel dim back: [B, S, E] -> [B, 1, S, E]
-            grad_q = ttnn::reshape(grad_q, ttnn::Shape{batch_size, 1, seq_len, embedding_dim});
+        // Reverse the forward transformations: (B, H, S, E/H) -> (B, 1, S, E)
+        // Step 1: Transpose back: [B, H, S, E/H] -> [B, S, H, E/H]
+        grad_q = ttnn::transpose(grad_q, 1, 2);
+        // Step 2: Merge heads: [B, S, H, E/H] -> [B, S, E]
+        grad_q = ttnn::reshape(grad_q, ttnn::Shape{batch_size, seq_len, embedding_dim});
+        // Step 3: Add channel dim back: [B, S, E] -> [B, 1, S, E]
+        grad_q = ttnn::reshape(grad_q, ttnn::Shape{batch_size, 1, seq_len, embedding_dim});
 
-            grad_k = ttnn::transpose(grad_k, 1, 2);
-            grad_k = ttnn::reshape(grad_k, ttnn::Shape{batch_size, seq_len, embedding_dim});
-            grad_k = ttnn::reshape(grad_k, ttnn::Shape{batch_size, 1, seq_len, embedding_dim});
+        grad_k = ttnn::transpose(grad_k, 1, 2);
+        grad_k = ttnn::reshape(grad_k, ttnn::Shape{batch_size, seq_len, embedding_dim});
+        grad_k = ttnn::reshape(grad_k, ttnn::Shape{batch_size, 1, seq_len, embedding_dim});
 
-            grad_v = ttnn::transpose(grad_v, 1, 2);
-            grad_v = ttnn::reshape(grad_v, ttnn::Shape{batch_size, seq_len, embedding_dim});
-            grad_v = ttnn::reshape(grad_v, ttnn::Shape{batch_size, 1, seq_len, embedding_dim});
+        grad_v = ttnn::transpose(grad_v, 1, 2);
+        grad_v = ttnn::reshape(grad_v, ttnn::Shape{batch_size, seq_len, embedding_dim});
+        grad_v = ttnn::reshape(grad_v, ttnn::Shape{batch_size, 1, seq_len, embedding_dim});
 
-            // Concatenate back to (B, 1, S, E*3)
-            auto result = ttnn::concat(std::vector<ttnn::Tensor>({grad_q, grad_k, grad_v}), /* dim */ 3);
-            qkv->add_grad(result);
-        };
+        // Concatenate back to (B, 1, S, E*3)
+        auto result = ttnn::concat(std::vector<ttnn::Tensor>({grad_q, grad_k, grad_v}), /* dim */ 3);
+        qkv->add_grad(result);
+    };
 
     auto links_q = autograd::get_links(qkv);
     out_q->set_node(autograd::ctx().add_backward_node(std::move(grad_q), links_q));

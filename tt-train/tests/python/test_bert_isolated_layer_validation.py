@@ -19,8 +19,8 @@ import sys
 import torch
 from pathlib import Path
 
-sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/sources/ttml')
-import ttml  # noqa: E402
+sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/build/sources/ttml')
+import _ttml as ttml  # noqa: E402
 
 transformers = pytest.importorskip("transformers", reason="transformers not installed")
 from transformers import BertModel, BertConfig  # noqa: E402
@@ -143,8 +143,12 @@ class BERTIsolatedLayerValidator:
 
         # Test embeddings
         print("\nTesting Embedding Layer...")
-        input_ids_ttml = ttml.autograd.Tensor.from_numpy(input_ids)
-        token_type_ids_ttml = ttml.autograd.Tensor.from_numpy(token_type_ids)
+        input_ids_ttml = ttml.autograd.Tensor.from_numpy(
+            input_ids.astype(np.float32).reshape(self.batch_size, 1, 1, self.seq_len)
+        )
+        token_type_ids_ttml = ttml.autograd.Tensor.from_numpy(
+            token_type_ids.astype(np.float32).reshape(self.batch_size, 1, 1, self.seq_len)
+        )
 
         ttml_embeddings = self.ttml_model.get_embeddings(input_ids_ttml, token_type_ids_ttml)
         ttml_embeddings_np = ttml_embeddings.to_numpy()
@@ -152,9 +156,23 @@ class BERTIsolatedLayerValidator:
         embeddings_pcc = self.compute_pcc(hf_layer_data["embeddings_output"], ttml_embeddings_np)
         embeddings_pass = embeddings_pcc >= 0.95
 
-        print(f"  {'✅' if embeddings_pass else '❌'} Embeddings: PCC={embeddings_pcc:.6f}")
+        mean_diff = np.mean(np.abs(hf_layer_data["embeddings_output"] - ttml_embeddings_np))
+        max_diff = np.max(np.abs(hf_layer_data["embeddings_output"] - ttml_embeddings_np))
 
-        results.append({"layer": "Embeddings", "pcc": embeddings_pcc, "passed": embeddings_pass})
+        print(
+            f"  {'✅' if embeddings_pass else '❌'} Embeddings: PCC={embeddings_pcc:.6f}, "
+            f"mean_diff={mean_diff:.6e}, max_diff={max_diff:.6e}"
+        )
+
+        results.append(
+            {
+                "layer": "Embeddings",
+                "pcc": embeddings_pcc,
+                "passed": embeddings_pass,
+                "mean_diff": mean_diff,
+                "max_diff": max_diff,
+            }
+        )
 
         # Test each block independently
         num_blocks = self.config.num_hidden_layers
@@ -169,7 +187,8 @@ class BERTIsolatedLayerValidator:
             block_input_ttml = ttml.autograd.Tensor.from_numpy(hf_block_input.astype(np.float32))
 
             # Run through TTML block
-            ttml_block_output = self.ttml_model.blocks[block_idx].forward(block_input_ttml, attention_mask_ttml)
+            ttml_block = self.ttml_model.get_block(block_idx)
+            ttml_block_output = ttml_block(block_input_ttml, attention_mask_ttml)
             ttml_block_output_np = ttml_block_output.to_numpy()
 
             # Compare outputs
@@ -221,15 +240,19 @@ class BERTIsolatedLayerValidator:
         print(f"  Average: {np.mean(pccs):.6f}")
         print(f"  Median:  {np.median(pccs):.6f}")
 
-        # Detailed breakdown
+        # Detailed breakdown table
         print(f"\n" + "=" * 80)
         print("DETAILED LAYER BREAKDOWN")
         print("=" * 80)
         print()
+        print(f"{'Layer':<20} {'Status':<8} {'PCC':>10} {'Mean Diff':>15} {'Max Diff':>15}")
+        print("-" * 80)
 
         for result in results:
-            status = "✅" if result["passed"] else "❌"
-            print(f"{status} {result['layer']:20s} PCC={result['pcc']:.6f}")
+            status = "✅ PASS" if result["passed"] else "❌ FAIL"
+            mean_diff_str = f"{result.get('mean_diff', 0):.6e}" if "mean_diff" in result else "N/A"
+            max_diff_str = f"{result.get('max_diff', 0):.6e}" if "max_diff" in result else "N/A"
+            print(f"{result['layer']:<20} {status:<8} {result['pcc']:>10.6f} {mean_diff_str:>15} {max_diff_str:>15}")
 
         return passed_layers == total_layers
 

@@ -469,7 +469,6 @@ void load_model_from_safetensors(const std::filesystem::path& path, serializatio
             // HuggingFace format uses "encoder.layer.", some other formats may use "bert.encoder.layer."
             else if (info.name.starts_with("encoder.layer.") || info.name.starts_with("bert.encoder.layer.")) {
                 // Encoder layer processing
-                bool is_encoder_layer = true;
                 // Extract layer index
                 std::string prefix = info.name.starts_with("bert.") ? "bert.encoder.layer." : "encoder.layer.";
                 size_t layer_start = prefix.length();
