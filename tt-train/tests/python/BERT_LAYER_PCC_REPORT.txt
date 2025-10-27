@@ -1,0 +1,68 @@
+BERT LAYER-BY-LAYER PCC REPORT
+====================================================================================================
+
+Comparing HuggingFace reference vs TTML implementation
+Note: Each layer receives output from previous TTML layer (cumulative errors)
+====================================================================================================
+
+Processing prajjwal1/bert-tiny...
+
+Processing prajjwal1/bert-small...
+
+Processing google/bert_uncased_L-4_H-512_A-8...
+
+Processing bert-base-uncased...
+
+====================================================================================================
+Layer                     bert-tiny     bert-smallbert_uncased_L-bert-base-uncas
+----------------------------------------------------------------------------------------------------
+Embeddings            ✅ 0.9557      ❌ 0.6531      ❌ 0.6531      ✅ 0.9765
+Block 0 Attn          ✅ 0.9644      ❌ 0.8495      ❌ 0.8495      ❌ 0.9302
+Block 0 Out           ✅ 0.9691      ❌ 0.7940      ❌ 0.7940      ❌ 0.8924
+Block 1 Attn          ❌ 0.9404      ❌ 0.8687      ❌ 0.8687      ❌ 0.6707
+Block 1 Out           ❌ 0.9493      ❌ 0.7578      ❌ 0.7578      ❌ 0.6106
+Final                 ❌ 0.9493      ❌ 0.8461      ❌ 0.8461      ❌ 0.5646
+Block 2 Out                          ❌ 0.7791      ❌ 0.7791      ❌ 0.4058
+Block 3 Attn                         ❌ 0.6756      ❌ 0.6756      ❌ 0.4396
+Block 3 Out                          ❌ 0.5969      ❌ 0.5969      ❌ 0.2906
+Final                                ❌ 0.5969      ❌ 0.5969      ❌ 0.3781
+Block 4 Out                                                        ❌ 0.2227
+Block 5 Attn                                                       ❌ 0.2281
+Block 5 Out                                                        ❌ 0.1228
+Block 6 Attn                                                       ❌ 0.0489
+Block 6 Out                                                        ❌ -0.0073
+Block 7 Attn                                                       ❌ 0.0815
+Block 7 Out                                                        ❌ -0.0242
+Block 8 Attn                                                       ❌ 0.1276
+Block 8 Out                                                        ❌ -0.0150
+Block 9 Attn                                                       ❌ 0.1916
+Block 9 Out                                                        ❌ 0.0605
+Block 10 Attn                                                      ❌ 0.2267
+Block 10 Out                                                       ❌ 0.0067
+Block 11 Attn                                                      ❌ 0.1118
+Block 11 Out                                                       ❌ 0.0425
+Final                                                              ❌ 0.0425
+====================================================================================================
+
+SUMMARY STATISTICS
+----------------------------------------------------------------------------------------------------
+Model                                    Layers     Pass/Total      Min PCC      Max PCC      Avg PCC
+----------------------------------------------------------------------------------------------------
+bert-tiny                                6          3/6             0.940422     0.969066     0.954687
+bert-small                               10         0/10            0.596949     0.868713     0.741770
+bert_uncased_L-4_H-512_A-8               10         0/10            0.596949     0.868713     0.741770
+bert-base-uncased                        26         1/26            -0.024162    0.976504     0.293331
+====================================================================================================
+
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /workspace/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+44.41s call     tt-train/tests/python/test_bert_layer_pcc_report.py::test_bert_layer_pcc_report[1-32]
+0.00s setup    tt-train/tests/python/test_bert_layer_pcc_report.py::test_bert_layer_pcc_report[1-32]
+0.00s teardown tt-train/tests/python/test_bert_layer_pcc_report.py::test_bert_layer_pcc_report[1-32]
+=========================== short test summary info ============================
+PASSED tt-train/tests/python/test_bert_layer_pcc_report.py::test_bert_layer_pcc_report[1-32]
+============================== 1 passed in 44.70s ==============================
+2025-10-27 16:24:29.840 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:419)
