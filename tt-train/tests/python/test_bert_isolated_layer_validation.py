@@ -143,11 +143,12 @@ class BERTIsolatedLayerValidator:
 
         # Test embeddings
         print("\nTesting Embedding Layer...")
+        # IMPORTANT: TTNN embedding expects UINT32 indices, not float32 or int32
         input_ids_ttml = ttml.autograd.Tensor.from_numpy(
-            input_ids.astype(np.float32).reshape(self.batch_size, 1, 1, self.seq_len)
+            input_ids.astype(np.uint32).reshape(self.batch_size, 1, 1, self.seq_len)
         )
         token_type_ids_ttml = ttml.autograd.Tensor.from_numpy(
-            token_type_ids.astype(np.float32).reshape(self.batch_size, 1, 1, self.seq_len)
+            token_type_ids.astype(np.uint32).reshape(self.batch_size, 1, 1, self.seq_len)
         )
 
         ttml_embeddings = self.ttml_model.get_embeddings(input_ids_ttml, token_type_ids_ttml)

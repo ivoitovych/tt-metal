@@ -124,12 +124,13 @@ class BERTLayerPCCReporter:
 
         hf_outputs = self.get_hf_intermediate_outputs(input_ids_torch, token_type_ids_torch)
 
-        # Get TTML outputs (convert to float32 for TTML)
+        # Get TTML outputs (convert to uint32 for TTML)
+        # IMPORTANT: TTNN embedding expects UINT32 indices, not float32 or int32
         input_ids_ttml = ttml.autograd.Tensor.from_numpy(
-            input_ids_np.astype(np.float32).reshape(self.batch_size, 1, 1, self.seq_len)
+            input_ids_np.astype(np.uint32).reshape(self.batch_size, 1, 1, self.seq_len)
         )
         token_type_ids_ttml = ttml.autograd.Tensor.from_numpy(
-            token_type_ids_np.astype(np.float32).reshape(self.batch_size, 1, 1, self.seq_len)
+            token_type_ids_np.astype(np.uint32).reshape(self.batch_size, 1, 1, self.seq_len)
         )
         attention_mask_ttml = ttml.autograd.Tensor.from_numpy(
             attention_mask_np.reshape(self.batch_size, 1, 1, self.seq_len)
