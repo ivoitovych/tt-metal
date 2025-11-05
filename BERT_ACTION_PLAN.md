@@ -8,17 +8,20 @@
 
 ## Executive Summary
 
-This action plan addresses the **35% completeness gap** in BERT implementation, focusing on two critical areas:
-1. **Distributed Training Infrastructure** (align with GPT-2/LLaMA patterns)
-2. **Task-Specific Heads** (enable production use cases)
+This action plan addresses the **35% completeness gap** in BERT implementation, focusing on **client-requested features** for production use cases:
+1. **Task-Specific Heads** (enable classification, NER, QA)
+2. **Training Infrastructure** (improve fine-tuning experience)
+3. **Advanced Features** (MLM for domain adaptation)
 
 **Current Status**: BERT at 65% completeness
 - Core: 95% ✅
 - Task Heads: 0% ❌
-- Distributed Training: 0% ❌
 - Training Utilities: 80% ⚠️
+- Distributed Training: 0% ⚠️ (deferred - no hardware available)
 
-**Target**: Achieve 90% completeness with distributed training + essential task heads
+**Target**: Achieve 85-90% completeness with essential task heads + training utilities
+
+**Note**: Distributed training infrastructure is included in this plan but deprioritized (P3) as it's not currently requested by clients and requires multi-device hardware that's not available yet.
 
 ---
 
@@ -31,213 +34,45 @@ TTML is **training-focused**, not deployment-focused:
 - Secondary use case: Feature extraction for downstream tasks
 - Out of scope (currently): Production fine-tuning, serving infrastructure
 
-### Key Insight
+### Key Insight: Client Needs Drive Priorities
 
-**GPT-2 and LLaMA lack task-specific heads too** - this is systematic across TTML. Therefore, task-specific heads should be considered **optional extensions** rather than core requirements.
+**Client Request Context**: Clients need BERT for production NLP tasks (classification, NER, QA), not large-scale pre-training. Therefore, **task-specific heads are the critical gap**, not distributed training.
 
-**However**: BERT **lacks distributed training support** that GPT-2 and LLaMA have. This is a critical gap for the training-focused framework.
+**BERT vs Other Models**: While GPT-2 and LLaMA also lack task-specific heads, BERT is specifically designed for fine-tuning on downstream tasks (unlike GPT-2/LLaMA which focus on language modeling/generation). This makes task heads more critical for BERT.
+
+**Distributed Training**: Deferred to P3 as:
+- Not requested by clients
+- No multi-device hardware available currently
+- Can be added later following GPT-2/LLaMA patterns when needed
 
 ---
 
 ## Priority Framework
 
-### P0: Critical for Training Parity 🚨
-Features that bring BERT to parity with GPT-2/LLaMA for training workloads
+### P0: Essential Task-Specific Heads 🔥
+Features that enable 80% of client-requested production use cases (classification, NER, QA)
 
-### P1: High-Impact Production Enablers 🔥
-Features that unlock 80% of common use cases with minimal effort
+### P1: Training Infrastructure 🛠️
+Features that improve fine-tuning experience and usability
 
-### P2: Training Infrastructure 🛠️
-Features that improve training experience and usability
+### P2: Advanced Features 📋
+Features for specialized use cases (MLM, pre-training, optimization)
 
-### P3: Advanced Features 📋
-Nice-to-have features for specialized use cases
+### P3: Distributed Training Infrastructure ⏸️
+Deferred - requires multi-device hardware (not currently available)
 
 ---
 
 ## Action Plan
 
-## P0: Distributed Training Infrastructure 🚨
+## P0: Essential Task-Specific Heads 🔥
 
-**Priority**: HIGHEST - Critical gap vs GPT-2/LLaMA
-**Timeline**: 3-4 weeks
-**Effort**: High
-**Impact**: Enables large-scale BERT training
-
-### Task 0.1: Add Tensor Parallelism (TP) Support
-
-**Rationale**: Both GPT-2 and LLaMA have TP support. BERT needs this for multi-device training.
-
-**Implementation Pattern** (follow LLaMA):
-```cpp
-// Location: tt-train/sources/ttml/models/distributed/bert.hpp
-namespace ttml::models::bert::distributed {
-    struct BertConfig {
-        // Inherit from base BertConfig
-        uint32_t tensor_parallel_size = 1U;
-        // Other distributed training params
-    };
-
-    class Bert : public ttml::models::bert::Bert {
-    private:
-        uint32_t m_tensor_parallel_size;
-        uint32_t m_device_id;
-
-    public:
-        explicit Bert(const BertConfig& config);
-        void setup_tensor_parallel(uint32_t rank, uint32_t world_size);
-        // Override forward pass for TP
-    };
-}
-```
-
-**Files to Create**:
-- `tt-train/sources/ttml/models/distributed/bert.hpp`
-- `tt-train/sources/ttml/models/distributed/bert.cpp`
-
-**Reference Implementations**:
-- LLaMA: `tt-train/sources/ttml/models/distributed/llama.{cpp,hpp}` (preferred - more modern)
-- GPT-2: `tt-train/sources/ttml/models/distributed/gpt2.{cpp,hpp}` (3-tier architecture)
-
-**Key Components**:
-1. Split attention heads across devices
-2. Split MLP intermediate dimension across devices
-3. All-reduce after attention output projection
-4. All-reduce after MLP output projection
-5. Collective communication primitives
-
-**Testing**:
-- [ ] Single-device matches non-distributed (sanity check)
-- [ ] 2-device TP produces correct outputs
-- [ ] 4-device TP produces correct outputs
-- [ ] 8-device TP produces correct outputs
-- [ ] Gradient correctness across devices
-
-**Estimated Effort**: 2-3 weeks
-
----
-
-### Task 0.2: Add Pipeline Parallelism (PP) Support
-
-**Rationale**: LLaMA has PP support for very large models (split layers across devices)
-
-**Implementation Pattern**:
-```cpp
-struct BertConfig {
-    uint32_t pipeline_parallel_size = 1U;
-    uint32_t num_pipeline_stages;
-};
-```
-
-**Key Components**:
-1. Partition transformer blocks across devices
-2. Implement pipeline schedule (GPipe, 1F1B, interleaved)
-3. Handle activation communication between stages
-4. Gradient accumulation across micro-batches
-
-**Testing**:
-- [ ] 2-stage pipeline produces correct outputs
-- [ ] 4-stage pipeline produces correct outputs
-- [ ] Gradient correctness across pipeline stages
-- [ ] Memory savings vs single-device
-
-**Estimated Effort**: 1-2 weeks
-
----
-
-### Task 0.3: Add Distributed Training Config Files
-
-**Rationale**: Both GPT-2 and LLaMA have extensive config files. BERT has **zero**.
-
-**Files to Create** (follow GPT-2/LLaMA patterns):
-```
-tt-train/configs/bert/
-├── bert-tiny-tp2.yaml          # 2-device tensor parallel
-├── bert-tiny-tp4.yaml          # 4-device tensor parallel
-├── bert-small-tp2.yaml
-├── bert-small-tp4.yaml
-├── bert-base-tp2.yaml
-├── bert-base-tp4.yaml
-├── bert-base-tp8.yaml
-├── bert-base-pp2.yaml          # 2-stage pipeline
-├── bert-base-tp4-pp2.yaml      # Hybrid TP+PP
-├── bert-large-tp8.yaml
-└── bert-large-tp8-pp4.yaml     # Large model with hybrid
-```
-
-**Config Content Pattern** (follow `tt-train/configs/gpt2/gpt2_117m.yaml`):
-```yaml
-model:
-  model_type: bert
-  vocab_size: 30522
-  max_sequence_length: 512
-  embedding_dim: 768
-  num_heads: 12
-  num_blocks: 12
-  dropout_prob: 0.1
-  layer_norm_eps: 1.0e-12
-  use_token_type_embeddings: true
-  type_vocab_size: 2
-
-distributed:
-  tensor_parallel_size: 4
-  pipeline_parallel_size: 1
-
-training:
-  batch_size: 32
-  gradient_accumulation_steps: 4
-  learning_rate: 5.0e-5
-  warmup_steps: 10000
-  max_steps: 1000000
-  weight_decay: 0.01
-```
-
-**Estimated Effort**: 2-3 days
-
----
-
-### Task 0.4: Add BERT to Model Factory
-
-**Rationale**: GPT-2 and LLaMA are in `TransformerModelFactory`. BERT is missing.
-
-**File to Modify**:
-- `tt-train/sources/ttml/ttml/common/model_factory.py`
-
-**Implementation**:
-```python
-class TransformerModelFactory:
-    def create_model(self):
-        if self.model_type == "gpt2":
-            return self._create_gpt2()
-        elif self.model_type == "llama":
-            return self._create_llama()
-        elif self.model_type == "bert":
-            return self._create_bert()
-        else:
-            raise ValueError(f"Model type {self.model_type} not supported")
-
-    def _create_bert(self):
-        # Create distributed or non-distributed BERT based on config
-        import ttml.models.bert as bert_module
-        if self.config.get('distributed', {}).get('tensor_parallel_size', 1) > 1:
-            import ttml.models.distributed.bert as dist_bert
-            return dist_bert.create(self.config)
-        else:
-            return bert_module.create(self.config)
-```
-
-**Estimated Effort**: 1-2 days
-
----
-
-## P1: High-Impact Task-Specific Heads 🔥
-
-**Priority**: HIGH - Enables production use cases
+**Priority**: HIGHEST - Client-requested production enablers
 **Timeline**: 2-3 weeks
 **Effort**: Medium
-**Impact**: Unlocks 80% of common NLP tasks
+**Impact**: Enables 80% of common NLP tasks (classification, NER, QA)
 
-### Task 1.1: Implement BertForSequenceClassification
+### Task 0.1: Implement BertForSequenceClassification
 
 **Impact**: Enables sentiment analysis, text classification, NLI
 **Use Cases**: 60% of BERT fine-tuning tasks
@@ -320,7 +155,7 @@ auto logits = model->forward(input_ids, attention_mask);  // [batch, 2]
 
 ---
 
-### Task 1.2: Implement BertForTokenClassification
+### Task 0.2: Implement BertForTokenClassification
 
 **Impact**: Enables NER, POS tagging, chunking
 **Use Cases**: 20% of BERT fine-tuning tasks
@@ -389,7 +224,7 @@ auto logits = model->forward(input_ids, attention_mask);  // [batch, seq_len, 9]
 
 ---
 
-### Task 1.3: Implement BertForQuestionAnswering
+### Task 0.3: Implement BertForQuestionAnswering
 
 **Impact**: Enables extractive QA (SQuAD, reading comprehension)
 **Use Cases**: 10% of BERT fine-tuning tasks
@@ -461,7 +296,7 @@ auto [start_logits, end_logits] = model->forward(input_ids, attention_mask, toke
 
 ---
 
-### Task 1.4: Create Example Training Scripts
+### Task 0.4: Create Example Training Scripts
 
 **Impact**: Demonstrates how to use task-specific heads
 **Estimated Effort**: 3-4 days
@@ -518,14 +353,14 @@ int main() {
 
 ---
 
-## P2: Training Infrastructure Improvements 🛠️
+## P1: Training Infrastructure Improvements 🛠️
 
-**Priority**: MEDIUM - Improves training experience
-**Timeline**: 2-3 weeks
+**Priority**: HIGH - Improves fine-tuning experience
+**Timeline**: 2-3 weeks (can run parallel with P0)
 **Effort**: Medium
 **Impact**: Better usability, faster convergence
 
-### Task 2.1: Add Learning Rate Schedulers
+### Task 1.1: Add Learning Rate Schedulers
 
 **Rationale**: BERT fine-tuning requires warmup + linear decay for good convergence
 
@@ -576,7 +411,7 @@ namespace ttml::optimizers {
 
 ---
 
-### Task 2.2: Add Gradient Clipping
+### Task 1.2: Add Gradient Clipping
 
 **Rationale**: Prevents exploding gradients during training
 
@@ -608,7 +443,7 @@ namespace ttml::optimizers {
 
 ---
 
-### Task 2.3: Add Standard Loss Functions
+### Task 1.3: Add Standard Loss Functions
 
 **Rationale**: Task-specific heads need standard losses
 
@@ -648,7 +483,7 @@ namespace ttml::ops {
 
 ---
 
-### Task 2.4: Add Checkpointing Utilities
+### Task 1.4: Add Checkpointing Utilities
 
 **Rationale**: Save/restore training state (model + optimizer)
 
@@ -680,14 +515,14 @@ namespace ttml::utils {
 
 ---
 
-## P3: Advanced Features 📋
+## P2: Advanced Features 📋
 
-**Priority**: LOW - Nice to have for specialized use cases
+**Priority**: MEDIUM - Specialized use cases
 **Timeline**: 1-2 months
 **Effort**: High
-**Impact**: Specialized use cases
+**Impact**: Domain adaptation, pre-training, optimization
 
-### Task 3.1: Implement BertForMaskedLM
+### Task 2.1: Implement BertForMaskedLM
 
 **Impact**: Enables domain adaptation via continued pre-training
 **Estimated Effort**: 3-5 days
@@ -710,7 +545,7 @@ private:
 
 ---
 
-### Task 3.2: Add Gradient Checkpointing (Memory-Efficient Runner)
+### Task 2.2: Add Gradient Checkpointing (Memory-Efficient Runner)
 
 **Impact**: Train larger models with limited memory
 **Estimated Effort**: 1 week
@@ -747,7 +582,7 @@ autograd::TensorPtr Bert::forward_memory_efficient(
 
 ---
 
-### Task 3.3: Add Mixed Precision Training Support
+### Task 2.3: Add Mixed Precision Training Support
 
 **Impact**: Faster training, lower memory usage
 **Estimated Effort**: 2 weeks
@@ -762,7 +597,7 @@ autograd::TensorPtr Bert::forward_memory_efficient(
 
 ---
 
-### Task 3.4: Implement BertForNextSentencePrediction
+### Task 2.4: Implement BertForNextSentencePrediction
 
 **Impact**: Limited (NSP task is mostly deprecated in modern BERT training)
 **Estimated Effort**: 2-3 days
@@ -781,7 +616,7 @@ private:
 
 ---
 
-### Task 3.5: Implement BertForPreTraining
+### Task 2.5: Implement BertForPreTraining
 
 **Impact**: Full BERT pre-training (MLM + NSP)
 **Estimated Effort**: 5-7 days
@@ -807,7 +642,7 @@ public:
 
 ---
 
-### Task 3.6: Add Model Export (ONNX)
+### Task 2.6: Add Model Export (ONNX)
 
 **Impact**: Enables deployment to production serving
 **Estimated Effort**: 2-3 weeks
@@ -816,57 +651,151 @@ public:
 
 ---
 
-## Implementation Phases
+## P3: Distributed Training Infrastructure ⏸️
 
-### Phase 0: Distributed Training Parity (3-4 weeks) 🚨
+**Priority**: LOW - Deferred (no hardware available, not client-requested)
+**Timeline**: 3-4 weeks (when hardware becomes available)
+**Effort**: High
+**Impact**: Enables large-scale BERT training on multi-device setups
 
-**Goal**: Bring BERT to parity with GPT-2/LLaMA for training workloads
+**Status**: ⏸️ **DEFERRED** - Included for completeness but not prioritized because:
+- Not currently requested by clients
+- Requires multi-device hardware (not available)
+- Can be added later following proven GPT-2/LLaMA patterns
+- Core BERT functionality works fine on single device
 
-**Tasks**:
-- [x] Review ecosystem patterns
-- [ ] Implement TP support (Task 0.1) - 2-3 weeks
-- [ ] Implement PP support (Task 0.2) - 1-2 weeks
-- [ ] Create distributed config files (Task 0.3) - 2-3 days
-- [ ] Add BERT to model factory (Task 0.4) - 1-2 days
+### Task 3.1: Add Tensor Parallelism (TP) Support
 
-**Success Metrics**:
-- [ ] BERT can train on 2/4/8 devices with TP
-- [ ] BERT can train with PP (2/4 stages)
-- [ ] Performance parity with GPT-2/LLaMA (throughput, memory)
-- [ ] All distributed configs work correctly
+**Rationale**: Both GPT-2 and LLaMA have TP support for multi-device training.
 
-**Outcome**: BERT ready for large-scale training workloads
+**Implementation Pattern** (follow LLaMA):
+```cpp
+// Location: tt-train/sources/ttml/models/distributed/bert.hpp
+namespace ttml::models::bert::distributed {
+    struct BertConfig {
+        // Inherit from base BertConfig
+        uint32_t tensor_parallel_size = 1U;
+    };
+
+    class Bert : public ttml::models::bert::Bert {
+    private:
+        uint32_t m_tensor_parallel_size;
+        uint32_t m_device_id;
+
+    public:
+        explicit Bert(const BertConfig& config);
+        void setup_tensor_parallel(uint32_t rank, uint32_t world_size);
+    };
+}
+```
+
+**Files to Create**:
+- `tt-train/sources/ttml/models/distributed/bert.hpp`
+- `tt-train/sources/ttml/models/distributed/bert.cpp`
+
+**Reference Implementations**:
+- LLaMA: `tt-train/sources/ttml/models/distributed/llama.{cpp,hpp}` (preferred)
+- GPT-2: `tt-train/sources/ttml/models/distributed/gpt2.{cpp,hpp}`
+
+**Key Components**:
+1. Split attention heads across devices
+2. Split MLP intermediate dimension across devices
+3. All-reduce after projections
+4. Collective communication primitives
+
+**Estimated Effort**: 2-3 weeks
 
 ---
 
-### Phase 1: Essential Task Heads (2-3 weeks) 🔥
+### Task 3.2: Add Pipeline Parallelism (PP) Support
 
-**Goal**: Enable 80% of common production use cases
+**Rationale**: For very large models (split layers across devices)
+
+**Implementation Pattern**:
+```cpp
+struct BertConfig {
+    uint32_t pipeline_parallel_size = 1U;
+    uint32_t num_pipeline_stages;
+};
+```
+
+**Key Components**:
+1. Partition transformer blocks across devices
+2. Implement pipeline schedule
+3. Handle activation communication
+4. Gradient accumulation across micro-batches
+
+**Estimated Effort**: 1-2 weeks
+
+---
+
+### Task 3.3: Add Distributed Training Config Files
+
+**Files to Create**:
+```
+tt-train/configs/bert/
+├── bert-base-tp2.yaml
+├── bert-base-tp4.yaml
+├── bert-large-tp8.yaml
+└── bert-large-tp8-pp4.yaml
+```
+
+**Estimated Effort**: 2-3 days
+
+---
+
+### Task 3.4: Add BERT to Model Factory
+
+**File to Modify**: `tt-train/sources/ttml/ttml/common/model_factory.py`
+
+**Implementation**:
+```python
+def _create_bert(self):
+    import ttml.models.bert as bert_module
+    if self.config.get('distributed', {}).get('tensor_parallel_size', 1) > 1:
+        import ttml.models.distributed.bert as dist_bert
+        return dist_bert.create(self.config)
+    else:
+        return bert_module.create(self.config)
+```
+
+**Estimated Effort**: 1-2 days
+
+---
+
+## Implementation Phases
+
+### Phase 0: Essential Task Heads (2-3 weeks) 🔥
+
+**Goal**: Enable 80% of client-requested production use cases
+**Priority**: HIGHEST
 
 **Tasks**:
-- [ ] BertForSequenceClassification (Task 1.1) - 2-3 days
-- [ ] BertForTokenClassification (Task 1.2) - 1-2 days
-- [ ] BertForQuestionAnswering (Task 1.3) - 2-3 days
-- [ ] Example training scripts (Task 1.4) - 3-4 days
+- [ ] BertForSequenceClassification (Task 0.1) - 2-3 days
+- [ ] BertForTokenClassification (Task 0.2) - 1-2 days
+- [ ] BertForQuestionAnswering (Task 0.3) - 2-3 days
+- [ ] Example training scripts (Task 0.4) - 3-4 days
 
 **Success Metrics**:
 - [ ] All task heads match HuggingFace outputs (PCC > 0.99)
 - [ ] Example scripts train and converge
+- [ ] Fine-tuning on standard benchmarks works (GLUE, CoNLL, SQuAD)
 - [ ] Documentation complete
 
 **Outcome**: Users can fine-tune BERT for classification, NER, QA without custom code
 
 ---
 
-### Phase 2: Training Infrastructure (2-3 weeks) 🛠️
+### Phase 1: Training Infrastructure (2-3 weeks) 🛠️
 
-**Goal**: Improve training experience and usability
+**Goal**: Improve fine-tuning experience and usability
+**Note**: Can run parallel with Phase 0
 
 **Tasks**:
-- [ ] Learning rate schedulers (Task 2.1) - 2-3 days
-- [ ] Gradient clipping (Task 2.2) - 1-2 days
-- [ ] Standard loss functions (Task 2.3) - 2-3 days
-- [ ] Checkpointing utilities (Task 2.4) - 2-3 days
+- [ ] Learning rate schedulers (Task 1.1) - 2-3 days
+- [ ] Gradient clipping (Task 1.2) - 1-2 days
+- [ ] Standard loss functions (Task 1.3) - 2-3 days
+- [ ] Checkpointing utilities (Task 1.4) - 2-3 days
 
 **Success Metrics**:
 - [ ] Schedulers produce correct LR schedules
@@ -878,17 +807,17 @@ public:
 
 ---
 
-### Phase 3: Advanced Features (1-2 months) 📋
+### Phase 2: Advanced Features (1-2 months) 📋
 
-**Goal**: Support specialized use cases
+**Goal**: Support specialized use cases (domain adaptation, pre-training, optimization)
 
 **Tasks**:
-- [ ] BertForMaskedLM (Task 3.1) - 3-5 days
-- [ ] Gradient checkpointing (Task 3.2) - 1 week
-- [ ] Mixed precision training (Task 3.3) - 2 weeks
-- [ ] BertForNextSentencePrediction (Task 3.4) - 2-3 days
-- [ ] BertForPreTraining (Task 3.5) - 5-7 days
-- [ ] Model export (Task 3.6) - 2-3 weeks
+- [ ] BertForMaskedLM (Task 2.1) - 3-5 days
+- [ ] Gradient checkpointing (Task 2.2) - 1 week
+- [ ] Mixed precision training (Task 2.3) - 2 weeks
+- [ ] BertForNextSentencePrediction (Task 2.4) - 2-3 days
+- [ ] BertForPreTraining (Task 2.5) - 5-7 days
+- [ ] Model export (Task 2.6) - 2-3 weeks
 
 **Success Metrics**:
 - [ ] MLM head enables domain adaptation
@@ -896,7 +825,32 @@ public:
 - [ ] Mixed precision speeds up training
 - [ ] Pre-training pipeline works end-to-end
 
-**Outcome**: Full BERT lifecycle support
+**Outcome**: Full BERT lifecycle support including pre-training
+
+---
+
+### Phase 3: Distributed Training ⏸️ (Deferred)
+
+**Goal**: Enable multi-device training (when hardware becomes available)
+**Status**: ⏸️ **DEFERRED** - Not currently prioritized
+
+**Tasks**:
+- [ ] Tensor Parallelism (Task 3.1) - 2-3 weeks
+- [ ] Pipeline Parallelism (Task 3.2) - 1-2 weeks
+- [ ] Distributed config files (Task 3.3) - 2-3 days
+- [ ] Add BERT to model factory (Task 3.4) - 1-2 days
+
+**Success Metrics**:
+- [ ] BERT can train on 2/4/8 devices with TP
+- [ ] BERT can train with PP (2/4 stages)
+- [ ] Performance parity with GPT-2/LLaMA
+
+**Outcome**: BERT ready for large-scale distributed training
+
+**Note**: This phase is deferred because:
+- Not requested by clients
+- Requires multi-device hardware (not available)
+- Can be added later following GPT-2/LLaMA patterns
 
 ---
 
@@ -905,56 +859,68 @@ public:
 ### Team Structure (Recommended)
 
 **Core Team** (1-2 engineers):
-- Focus on P0 (distributed training) + P1 (task heads)
-- Timeline: 5-7 weeks
+- Focus on P0 (task-specific heads)
+- Timeline: 2-3 weeks
 
 **Infrastructure Team** (1 engineer):
-- Focus on P2 (training utilities)
-- Timeline: 2-3 weeks (parallel with P1)
+- Focus on P1 (training utilities)
+- Timeline: 2-3 weeks (parallel with P0)
 
 **Research Team** (1 engineer, part-time):
-- Focus on P3 (advanced features)
-- Timeline: 1-2 months (after P0/P1/P2)
+- Focus on P2 (advanced features)
+- Timeline: 1-2 months (after P0/P1)
+
+**Future Team** (deferred):
+- Focus on P3 (distributed training)
+- Timeline: 3-4 weeks (when hardware available and client-requested)
 
 ### Timeline Summary
 
-**Short-term** (6-8 weeks):
-- Phase 0: Distributed training (3-4 weeks)
-- Phase 1: Task heads (2-3 weeks, parallel with Phase 2)
-- Phase 2: Training utilities (2-3 weeks, parallel with Phase 1)
+**Short-term** (4-6 weeks) - Client-Requested Features:
+- Phase 0: Task-specific heads (2-3 weeks)
+- Phase 1: Training utilities (2-3 weeks, parallel with Phase 0)
 
-**Medium-term** (2-3 months):
-- Phase 3: Advanced features (1-2 months)
+**Medium-term** (2-3 months) - Advanced Features:
+- Phase 2: Advanced features (1-2 months)
 
-**Total**: ~3-4 months for full 90% completeness
+**Future** (deferred) - Multi-Device Training:
+- Phase 3: Distributed training (3-4 weeks, when needed)
+
+**Total**: ~2-3 months for 85-90% completeness (excluding deferred distributed training)
 
 ---
 
 ## Success Metrics
 
-### Phase 0 Success (Distributed Training)
-- [ ] BERT achieves >90% throughput vs GPT-2/LLaMA on same hardware
-- [ ] 8-device TP training produces bit-exact outputs vs reference
-- [ ] Memory usage matches theoretical expectations
-- [ ] All distributed configs work without issues
-
-### Phase 1 Success (Task Heads)
+### Phase 0 Success (Task-Specific Heads)
 - [ ] All task heads match HuggingFace (PCC > 0.99)
 - [ ] Fine-tuning converges on standard benchmarks (GLUE, CoNLL, SQuAD)
 - [ ] Example scripts work out-of-the-box
 - [ ] Documentation enables users to fine-tune without help
+- [ ] Client validation: Heads solve their production use cases
 
-### Phase 2 Success (Training Utilities)
+### Phase 1 Success (Training Infrastructure)
 - [ ] LR schedulers improve convergence speed by 10-20%
 - [ ] Gradient clipping prevents training instability
 - [ ] Loss functions match PyTorch exactly
 - [ ] Checkpointing enables training resumption
 
-### Overall Success (90% Completeness Target)
-- [ ] BERT at training parity with GPT-2/LLaMA
+### Phase 2 Success (Advanced Features)
+- [ ] MLM head enables domain adaptation
+- [ ] Gradient checkpointing reduces memory usage
+- [ ] Mixed precision speeds up training
+- [ ] Pre-training pipeline works end-to-end
+
+### Phase 3 Success (Distributed Training - Deferred)
+- [ ] BERT achieves >90% throughput vs GPT-2/LLaMA on same hardware
+- [ ] 8-device TP training produces bit-exact outputs vs reference
+- [ ] Memory usage matches theoretical expectations
+
+### Overall Success (85-90% Completeness Target)
 - [ ] 80% of common NLP tasks supported out-of-the-box
-- [ ] Training experience comparable to HuggingFace Transformers
-- [ ] Production-ready for both training and fine-tuning
+- [ ] Training/fine-tuning experience comparable to HuggingFace Transformers
+- [ ] Production-ready for single-device training and fine-tuning
+- [ ] Client requirements fully met
 
 ---
 
@@ -962,51 +928,68 @@ public:
 
 ### Technical Risks
 
-**Risk 1**: Distributed training implementation is complex
-- **Mitigation**: Follow proven LLaMA/GPT-2 patterns closely
-- **Mitigation**: Start with 2-device TP, validate thoroughly before scaling
-- **Mitigation**: Test gradient correctness at each step
-
-**Risk 2**: Task head outputs don't match HuggingFace
+**Risk 1**: Task head outputs don't match HuggingFace
 - **Mitigation**: Layer-by-layer validation (proven approach from MHA fix)
 - **Mitigation**: Use test_bert_isolated_layer_validation.py pattern
 - **Mitigation**: Compare intermediate activations, not just final output
+- **Impact**: HIGH - Could block production use
+
+**Risk 2**: Fine-tuning convergence issues
+- **Mitigation**: Start with known-good hyperparameters from HuggingFace
+- **Mitigation**: Test on small datasets first (GLUE dev sets)
+- **Mitigation**: Implement proper LR schedulers early (warmup + decay)
+- **Impact**: MEDIUM - Can be debugged incrementally
 
 **Risk 3**: Memory usage exceeds expectations
 - **Mitigation**: Profile memory usage early and often
-- **Mitigation**: Implement gradient checkpointing (Task 3.2) if needed
+- **Mitigation**: Implement gradient checkpointing (Task 2.2) if needed
 - **Mitigation**: Use smaller batch sizes for testing
+- **Impact**: LOW - Can adjust batch size
 
 ### Resource Risks
 
 **Risk 4**: Timeline slips due to unforeseen complexity
-- **Mitigation**: Start with P0 (highest priority) and deliver incrementally
-- **Mitigation**: P1/P2 can be parallelized
-- **Mitigation**: P3 is optional and can be deferred
+- **Mitigation**: Start with P0 (task heads) - highest priority, client-driven
+- **Mitigation**: P0 and P1 can be parallelized
+- **Mitigation**: P2 is optional for initial release
+- **Mitigation**: P3 (distributed) explicitly deferred
+- **Impact**: LOW - Priorities are clear and aligned with client needs
 
-**Risk 5**: Lack of specialized knowledge (distributed training)
-- **Mitigation**: Study existing LLaMA/GPT-2 implementations first
-- **Mitigation**: Start with simpler TP before PP
-- **Mitigation**: Consult with team members who worked on GPT-2/LLaMA
+**Risk 5**: Client requirements change
+- **Mitigation**: Validate task heads with clients early (after P0)
+- **Mitigation**: Iterative development with frequent check-ins
+- **Mitigation**: Keep distributed training (P3) as future option
+- **Impact**: MEDIUM - Address through communication
 
 ---
 
 ## Decision Log
 
-### Decision 1: Prioritize Distributed Training Over Task Heads
-**Rationale**: BERT is the **only** TTML model without distributed training. This is a critical gap for the training-focused framework. Task heads, while useful, are optional extensions (GPT-2/LLaMA don't have them either).
+### Decision 1: Prioritize Task Heads Over Distributed Training ✅
+**Rationale**:
+- **Client needs drive priorities**: Clients requested BERT for production NLP tasks (classification, NER, QA), not distributed pre-training
+- **Hardware constraints**: No multi-device hardware currently available for distributed training
+- **BERT's purpose**: Unlike GPT-2/LLaMA (language modeling), BERT is specifically designed for fine-tuning on downstream tasks, making task heads more critical
+- **Practical impact**: Task heads enable 80% of use cases immediately, distributed training enables 0% (no hardware)
 
-### Decision 2: Follow LLaMA Patterns, Not GPT-2
-**Rationale**: LLaMA is more mature (95% completeness) and has cleaner architecture than GPT-2's 3-tier system. BERT's attention mechanism is more similar to LLaMA's than GPT-2's.
+### Decision 2: Defer Distributed Training to P3 ⏸️
+**Rationale**:
+- Not client-requested
+- Requires multi-device hardware (not available)
+- Can be added later following proven GPT-2/LLaMA patterns when needed
+- Core BERT functionality (65% complete) works fine on single device
 
 ### Decision 3: Implement 3 Task Heads, Not All 7
-**Rationale**: BertForSequenceClassification, BertForTokenClassification, and BertForQuestionAnswering cover 80% of use cases. The other 4 (MLM, NSP, PreTraining, MultipleChoice) are specialized and can be deferred to P3.
+**Rationale**: BertForSequenceClassification, BertForTokenClassification, and BertForQuestionAnswering cover 80% of use cases. The other 4 (MLM, NSP, PreTraining, MultipleChoice) are specialized and can be deferred to P2.
 
-### Decision 4: Training Utilities (P2) Can Run Parallel with Task Heads (P1)
-**Rationale**: These are independent work streams. P2 improves training experience for ALL models (not just BERT), so can be done by a separate team member.
+### Decision 4: Training Utilities (P1) Can Run Parallel with Task Heads (P0)
+**Rationale**: These are independent work streams. P1 improves training experience for ALL models (not just BERT), so can be done by a separate team member.
 
-### Decision 5: Model Export (ONNX) is Low Priority
-**Rationale**: TTML is training-focused, not deployment-focused. Export is useful but not critical for the 90% completeness target. Can be deferred to P3 or later.
+### Decision 5: Follow LLaMA Patterns for Future Distributed Work
+**Rationale**: When P3 (distributed training) is implemented, follow LLaMA patterns. LLaMA is more mature (95% completeness) and has cleaner architecture than GPT-2's 3-tier system.
+
+### Decision 6: Target 85-90% Completeness (Not 100%)
+**Rationale**: 85-90% completeness with task heads + training utilities meets client needs. The remaining 10-15% (distributed training, exotic features) can be added incrementally when needed.
 
 ---
 
@@ -1024,4 +1007,4 @@ public:
 
 ---
 
-**Next Steps**: Review this action plan with stakeholders, prioritize phases, and allocate resources for Phase 0 (distributed training).
+**Next Steps**: Review this action plan with stakeholders, validate priorities align with client needs, and allocate resources for Phase 0 (task-specific heads).
