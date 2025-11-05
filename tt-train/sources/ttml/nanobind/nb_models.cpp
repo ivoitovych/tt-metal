@@ -40,6 +40,8 @@ void py_module_types(nb::module_& m, nb::module_& m_modules) {
         auto py_bert_module = m.def_submodule("bert");
         nb::class_<models::bert::BertConfig>(py_bert_module, "BertConfig");
         nb::class_<models::bert::Bert, models::BaseTransformer>(py_bert_module, "Bert");
+        nb::class_<models::bert::BertForSequenceClassification, models::bert::Bert>(
+            py_bert_module, "BertForSequenceClassification");
     }
 
     {
@@ -197,6 +199,47 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
             "num_blocks",
             [](const models::bert::Bert& self) { return self.get_config().num_blocks; },
             "Get the number of blocks in the model");
+
+        // BertForSequenceClassification bindings
+        py_bert_module.def(
+            "create_for_sequence_classification",
+            [](const models::bert::BertConfig& config, uint32_t num_labels, float classifier_dropout) {
+                return models::bert::create_for_sequence_classification(config, num_labels, classifier_dropout);
+            },
+            nb::arg("config"),
+            nb::arg("num_labels"),
+            nb::arg("classifier_dropout") = 0.1F,
+            "Create BERT model for sequence classification");
+
+        auto py_bert_for_seq_cls =
+            static_cast<nb::class_<models::bert::BertForSequenceClassification, models::bert::Bert>>(
+                py_bert_module.attr("BertForSequenceClassification"));
+        py_bert_for_seq_cls.def(
+            nb::init<const models::bert::BertConfig&, uint32_t, float>(),
+            nb::arg("config"),
+            nb::arg("num_labels"),
+            nb::arg("classifier_dropout") = 0.1F);
+        py_bert_for_seq_cls.def(
+            "__call__",
+            static_cast<autograd::TensorPtr (models::bert::BertForSequenceClassification::*)(
+                const autograd::TensorPtr&, const autograd::TensorPtr&, const autograd::TensorPtr&)>(
+                &models::bert::BertForSequenceClassification::operator()),
+            nb::arg("input_ids"),
+            nb::arg("attention_mask") = nullptr,
+            nb::arg("token_type_ids") = nullptr,
+            "Forward pass returning classification logits");
+        py_bert_for_seq_cls.def(
+            "forward_with_loss",
+            &models::bert::BertForSequenceClassification::forward_with_loss,
+            nb::arg("input_ids"),
+            nb::arg("attention_mask"),
+            nb::arg("token_type_ids"),
+            nb::arg("labels"),
+            "Forward pass with loss computation");
+        py_bert_for_seq_cls.def(
+            "get_num_labels",
+            &models::bert::BertForSequenceClassification::get_num_labels,
+            "Get number of classification labels");
     }
 
     {

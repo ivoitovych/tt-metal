@@ -17,6 +17,7 @@
 #include "modules/linear_module.hpp"
 #include "modules/positional_embeddings.hpp"
 #include "ops/binary_ops.hpp"
+#include "ops/losses.hpp"
 #include "ops/unary_ops.hpp"
 #include "serialization/safetensors.hpp"
 #include "serialization/serializable.hpp"
@@ -709,6 +710,101 @@ std::shared_ptr<Bert> create(const BertConfig& config) {
 std::shared_ptr<Bert> create(const YAML::Node& config) {
     BertConfig bert_config = read_config(config);
     return std::make_shared<Bert>(bert_config);
+}
+
+// BertForSequenceClassification implementation
+BertForSequenceClassification::BertForSequenceClassification(
+    const BertConfig& config, uint32_t num_labels, float classifier_dropout) :
+    Bert([&config]() {
+        // Ensure pooler is enabled for sequence classification
+        BertConfig modified_config = config;
+        modified_config.use_pooler = true;
+        return modified_config;
+    }()),
+    m_num_labels(num_labels) {
+    uint32_t embedding_dim = config.embedding_dim;
+
+    // Validate num_labels
+    if (num_labels < 1) {
+        throw std::logic_error(fmt::format("num_labels must be at least 1, got {}", num_labels));
+    }
+
+    // Align num_labels to 32 for tensor operations
+    uint32_t num_labels_aligned = ((num_labels + 31) / 32) * 32;
+
+    fmt::print("BertForSequenceClassification configuration:\n");
+    fmt::print("    Num labels: {} (aligned to {})\n", num_labels, num_labels_aligned);
+    fmt::print("    Classifier dropout: {}\n", classifier_dropout);
+
+    // Classifier dropout (applied after pooler)
+    m_classifier_dropout = std::make_shared<modules::DropoutLayer>(classifier_dropout);
+
+    // Classification head: embedding_dim -> num_labels
+    m_classifier = std::make_shared<modules::LinearLayer>(embedding_dim, num_labels_aligned);
+
+    // Register new modules (base class modules already registered)
+    register_module(m_classifier_dropout, "classifier_dropout");
+    register_module(m_classifier, "classifier");
+
+    // Initialize classifier weights with standard normal (std=0.02)
+    // Matches BERT initialization for new heads
+    common::transformer::initialize_weights_gpt2(*m_classifier);
+}
+
+// 3-parameter version for BERT-specific usage
+autograd::TensorPtr BertForSequenceClassification::operator()(
+    const autograd::TensorPtr& input_ids,
+    const autograd::TensorPtr& attention_mask,
+    const autograd::TensorPtr& token_type_ids) {
+    // Get pooled output from base BERT (already includes [CLS] extraction + linear + tanh)
+    auto pooled_output = Bert::forward(input_ids, attention_mask, token_type_ids);
+
+    // Apply classifier dropout
+    pooled_output = (*m_classifier_dropout)(pooled_output);
+
+    // Apply classification head to get logits
+    auto logits = (*m_classifier)(pooled_output);
+
+    return logits;
+}
+
+// 2-parameter version for BaseTransformer interface
+autograd::TensorPtr BertForSequenceClassification::operator()(
+    const autograd::TensorPtr& x, const autograd::TensorPtr& mask) {
+    // Delegate to 3-parameter version with nullptr for token_type_ids
+    return (*this)(x, mask, nullptr);
+}
+
+std::tuple<autograd::TensorPtr, autograd::TensorPtr> BertForSequenceClassification::forward_with_loss(
+    const autograd::TensorPtr& input_ids,
+    const autograd::TensorPtr& attention_mask,
+    const autograd::TensorPtr& token_type_ids,
+    const autograd::TensorPtr& labels) {
+    // Forward pass to get logits
+    auto logits = (*this)(input_ids, attention_mask, token_type_ids);
+
+    // Compute cross-entropy loss
+    // logits shape: [batch_size, 1, 1, num_labels]
+    // labels shape: [batch_size, 1, 1, 1] or [batch_size] (will be broadcasted)
+    auto loss = ops::cross_entropy_loss(logits, labels, ops::ReduceType::MEAN);
+
+    return std::make_tuple(loss, logits);
+}
+
+void BertForSequenceClassification::load_from_safetensors(const std::filesystem::path& model_path) {
+    // Load base BERT weights (including pooler)
+    Bert::load_from_safetensors(model_path);
+
+    // Classifier weights will be randomly initialized if not present in safetensors
+    // This matches HuggingFace behavior where task heads are randomly initialized
+    // when loading from pretrained BERT base models
+    fmt::print("Note: Classifier head weights are randomly initialized.\n");
+    fmt::print("      Fine-tune the model on your classification task.\n");
+}
+
+std::shared_ptr<BertForSequenceClassification> create_for_sequence_classification(
+    const BertConfig& config, uint32_t num_labels, float classifier_dropout) {
+    return std::make_shared<BertForSequenceClassification>(config, num_labels, classifier_dropout);
 }
 
 }  // namespace ttml::models::bert

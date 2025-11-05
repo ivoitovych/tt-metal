@@ -119,4 +119,41 @@ std::shared_ptr<Bert> create(const YAML::Node& config);
 
 void load_model_from_safetensors(const std::filesystem::path& path, serialization::NamedParameters& parameters);
 
+// Task-specific head for sequence classification
+class BertForSequenceClassification : public Bert {
+private:
+    std::shared_ptr<modules::DropoutLayer> m_classifier_dropout;
+    std::shared_ptr<modules::LinearLayer> m_classifier;
+    uint32_t m_num_labels;
+
+public:
+    BertForSequenceClassification(const BertConfig& config, uint32_t num_labels, float classifier_dropout = 0.1F);
+
+    // Forward pass returning classification logits (3-parameter version)
+    [[nodiscard]] autograd::TensorPtr operator()(
+        const autograd::TensorPtr& input_ids,
+        const autograd::TensorPtr& attention_mask = nullptr,
+        const autograd::TensorPtr& token_type_ids = nullptr);
+
+    // BaseTransformer interface - required override (2-parameter version)
+    [[nodiscard]] autograd::TensorPtr operator()(
+        const autograd::TensorPtr& x, const autograd::TensorPtr& mask) override;
+
+    // Forward pass with loss computation for training
+    [[nodiscard]] std::tuple<autograd::TensorPtr, autograd::TensorPtr> forward_with_loss(
+        const autograd::TensorPtr& input_ids,
+        const autograd::TensorPtr& attention_mask,
+        const autograd::TensorPtr& token_type_ids,
+        const autograd::TensorPtr& labels);
+
+    void load_from_safetensors(const std::filesystem::path& model_path) override;
+
+    [[nodiscard]] uint32_t get_num_labels() const {
+        return m_num_labels;
+    }
+};
+
+[[nodiscard]] std::shared_ptr<BertForSequenceClassification> create_for_sequence_classification(
+    const BertConfig& config, uint32_t num_labels, float classifier_dropout = 0.1F);
+
 }  // namespace ttml::models::bert
