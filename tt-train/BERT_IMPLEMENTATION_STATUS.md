@@ -7,7 +7,7 @@
 
 This document tracks the implementation status of BERT (Bidirectional Encoder Representations from Transformers) for the TTML framework. The implementation includes the base BERT model, BertForSequenceClassification task-specific head, and comprehensive validation against HuggingFace reference implementations.
 
-## Implementation Status: ✅ Production Ready
+## Implementation Status: ❌ NOT Production Ready - Critical Bugs Present
 
 ### Core Components Implemented
 
@@ -98,37 +98,49 @@ All tests from changed files pass when accounting for test harness issues:
 - Intended models: SST-2 (sentiment), MNLI (NLI)
 - Status: Deferred for future optimization
 
-## Known Limitations
+## Critical Bugs - BLOCKING Production Use
 
-### 1. Batch Processing (Python Only)
-- **Issue**: Python tests show batch_size > 1 produces identical outputs for all samples
-- **Status**: Works correctly in C++ (BatchSizeIndependence test passes with PCC=1.0)
-- **Root Cause**: Python binding specific, possibly related to tensor creation/passing
-- **Workaround**: All Python tests use batch_size=1
-- **Impact**: Low - inference typically uses batch_size=1; training still possible in C++
+### 1. Batch Processing Bug (CRITICAL - BLOCKING)
+- **Issue**: When batch_size > 1, ALL samples in the batch produce IDENTICAL outputs regardless of input differences
+- **Status**: CONFIRMED in both Python AND C++ implementations
+- **Evidence**:
+  - Python: `tt-train/debug_batch_processing.py` - All batch samples identical
+  - Python: `tt-train/debug_tensor_shapes.py` - Reproduced at batch_size=2,4
+  - C++: `tt-train/tests/model/bert_batch_bug_test.cpp` - Test confirms bug
+  - Individual processing (batch_size=1) works correctly
+- **False Positive**: The C++ test `BatchSizeIndependence` in `bert_seq_cls_test.cpp` is misleading.
+  It only checks if sample[0] matches an individual run, never verifies samples differ within batch.
+- **Root Cause**: Under investigation. Likely in embedding layer, attention mechanism, or pooler slice operation
+- **Workaround**: MUST use batch_size=1 for all operations
+- **Impact**: CRITICAL - Makes batch inference and batch training completely non-functional
 
-### 2. Attention Mask Handling
-- **Issue**: All-ones attention masks produce lower PCC (~0.80-0.93)
+### 2. Attention Mask Handling (BLOCKING)
+- **Issue**: All-ones attention masks (no padding) produce significantly lower PCC (~0.80-0.93)
 - **Status**: Partial masking works well (PCC ≥ 0.98)
-- **Workaround**: Tests mask last 25% of tokens
-- **Impact**: Medium - real-world data typically has padding, so partial masking is common
+- **Root Cause**: Unknown - may be related to attention computation or mask broadcasting
+- **Workaround**: Tests artificially mask last 25% of tokens
+- **Impact**: HIGH - Real sequences without padding cannot be processed accurately
+- **Consequence**: Limits usability to sequences that require padding
 
-### 3. Numerical Precision
+### 3. Numerical Precision (Acceptable)
 - **Hardware Precision**: PCC ~0.98 vs CPU reference (target was 0.99)
 - **Reason**: Hardware accelerator precision limitations
 - **Status**: Acceptable for validation (0.98 is excellent correlation)
-- **Impact**: Low - 0.98 PCC is production-quality
+- **Impact**: LOW - 0.98 PCC is generally considered production-quality
 
-### 4. Seed Sensitivity
-- **Issue**: Some random seeds (e.g., 42) produce poor results
+### 4. Seed Sensitivity (BLOCKING for testing)
+- **Issue**: Some random seeds (e.g., 42) produce completely wrong results (PCC = -1.0, inverted outputs)
+- **Status**: Seed 43+ works reliably
+- **Root Cause**: Unknown - extremely concerning that seed affects correctness (not just initialization)
 - **Workaround**: Tests use seed 43+
-- **Impact**: Low - affects testing only, not production use
+- **Impact**: MEDIUM - Indicates potential non-determinism or initialization bug
 
-### 5. Multi-Label Support
-- **Issue**: 3+ label configurations show lower PCC (0.93)
-- **Status**: 2-label (binary) classification validated
+### 5. Multi-Label Support (BLOCKING for general use)
+- **Issue**: 3+ label configurations show lower PCC (~0.93, below 0.98 threshold)
+- **Status**: Only 2-label (binary) classification validated and working
+- **Root Cause**: Unknown - may be related to classifier head or softmax computation
 - **Workaround**: Disabled 3+ label tests
-- **Impact**: Medium - binary classification works perfectly; multi-class needs investigation
+- **Impact**: HIGH - Restricts use to binary classification only; multi-class classification broken
 
 ## Validated Configurations
 
@@ -267,14 +279,38 @@ output = logits.to_numpy()
 
 ## Conclusion
 
-The BERT implementation for TTML is **production-ready** with the following caveats:
-- Use `batch_size=1` in Python (C++ supports larger batches)
-- Binary classification (2 labels) is fully validated
-- Use partial attention masking (not all-ones)
-- BERT-tiny and BERT-small are validated; BERT-base needs additional testing
+The BERT implementation for TTML is **NOT production-ready** due to critical bugs:
 
-All core functionality works correctly with excellent numerical accuracy (PCC ≥ 0.98). The implementation supports the full BERT architecture including embeddings, multi-layer transformers, attention mechanisms, and task-specific heads.
+### Blocking Issues (Must Fix Before Production):
+1. **Batch Processing**: Completely broken for batch_size > 1 (all samples get identical outputs)
+2. **Attention Masking**: Cannot handle sequences without padding (all-ones masks fail)
+3. **Multi-Label Classification**: Broken for 3+ labels (only binary works)
+4. **Seed Sensitivity**: Random initialization affects correctness (not just weights)
 
-**Test Status**: 132/133 tests passing (99.2%)
-**Production Ready**: Yes, with documented limitations
-**Recommended Use Cases**: Binary sequence classification with batch_size=1
+### Current Functional Scope (Very Limited):
+- ✅ Single-sample inference (batch_size=1 only)
+- ✅ Binary classification (2 labels only)
+- ✅ Sequences with artificial padding (must mask ~25% of tokens)
+- ✅ Specific seed values (43+, seed 42 produces wrong results)
+
+### Test Status Analysis:
+- **Reported**: 132/133 tests passing (99.2%) - MISLEADING
+- **Reality**: Tests pass only because they use workarounds and avoid broken functionality
+- **False Positive**: C++ BatchSizeIndependence test doesn't actually validate batch correctness
+- **Disabled Tests**: 3+ label tests, bert-base tests, all-ones mask tests
+
+### Recommendation:
+**DO NOT USE IN PRODUCTION** until critical bugs are fixed. The implementation has correct
+architecture and works for the narrow case of single-sample binary classification with padding,
+but fundamental batch processing is broken.
+
+### Required Work for Production:
+1. Fix batch processing bug (investigate embedding/attention/pooler layers)
+2. Fix attention mask handling for all-ones masks
+3. Fix multi-label classification (3+ labels)
+4. Investigate and fix seed sensitivity issue
+5. Re-enable all disabled tests and verify they pass
+6. Remove all workarounds from tests
+7. Validate BERT-base models
+
+**Current Status**: Implementation in progress, not suitable for production use

@@ -327,7 +327,28 @@ TEST_F(BertSeqClsTest, OutputConsistency) {
 }
 
 TEST_F(BertSeqClsTest, BatchSizeIndependence) {
-    // Test that different batch sizes produce consistent per-sample results
+    // WARNING: This test is a FALSE POSITIVE and does not actually validate batch processing!
+    //
+    // WHAT IT CLAIMS: "Test that different batch sizes produce consistent per-sample results"
+    //
+    // WHAT IT ACTUALLY TESTS:
+    // - Runs one input individually (batch_size=1)
+    // - Runs two DIFFERENT inputs as a batch (batch_size=2)
+    // - Compares ONLY the first sample from the batch to the individual run
+    // - Verifies they match (which they should, since it's the same input)
+    //
+    // WHAT IT DOES NOT TEST:
+    // - Whether samples within the batch produce DIFFERENT outputs for DIFFERENT inputs
+    // - Whether sample[1] in the batch differs from sample[0]
+    // - Actual batch processing correctness
+    //
+    // THE CRITICAL BUG THIS MISSES:
+    // When batch_size > 1, ALL samples produce IDENTICAL outputs regardless of input.
+    // This test passes even with the bug because it only checks sample[0].
+    //
+    // See bert_batch_bug_test.cpp for a proper test that exposes the actual bug.
+    //
+    // TODO: Either fix this test to check all samples differ, or remove it as misleading.
 
     BertConfig config;
     config.vocab_size = 100;
