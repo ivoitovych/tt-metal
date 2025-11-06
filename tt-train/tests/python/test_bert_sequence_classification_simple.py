@@ -77,41 +77,21 @@ def test_bert_sequence_classification_basic(model_name, num_labels, batch_size, 
     attention_mask_np = np.ones((batch_size, seq_len), dtype=np.int64)
 
     # Convert to TTML tensors
-    from ttml.autograd import create_tensor
-    from ttml.core import from_vector, get_device, to_vector
+    input_ids_reshaped = input_ids_np.reshape(batch_size, 1, 1, seq_len).astype(np.float32)
+    input_ids_ttml = ttml.autograd.Tensor.from_numpy(input_ids_reshaped)
 
-    device = get_device()
+    token_type_ids_reshaped = token_type_ids_np.reshape(batch_size, 1, 1, seq_len).astype(np.float32)
+    token_type_ids_ttml = ttml.autograd.Tensor.from_numpy(token_type_ids_reshaped)
 
-    input_ids_ttml = create_tensor(
-        from_vector(
-            input_ids_np.flatten().tolist(),
-            [batch_size, 1, 1, seq_len],
-            device,
-        )
-    )
-
-    token_type_ids_ttml = create_tensor(
-        from_vector(
-            token_type_ids_np.flatten().tolist(),
-            [batch_size, 1, 1, seq_len],
-            device,
-        )
-    )
-
-    attention_mask_ttml = create_tensor(
-        from_vector(
-            attention_mask_np.flatten().tolist(),
-            [batch_size, 1, 1, seq_len],
-            device,
-        )
-    )
+    attention_mask_reshaped = attention_mask_np.reshape(batch_size, 1, 1, seq_len).astype(np.float32)
+    attention_mask_ttml = ttml.autograd.Tensor.from_numpy(attention_mask_reshaped)
 
     # Forward pass
     print(f"Running forward pass...")
     logits = ttml_model(input_ids_ttml, attention_mask_ttml, token_type_ids_ttml)
 
     # Convert output to numpy
-    logits_np = np.array(to_vector(logits.get_value())).reshape(batch_size, 1, 1, -1)
+    logits_np = logits.to_numpy()
 
     # Check output shape (num_labels is aligned to 32, so we extract only actual labels)
     num_labels_aligned = logits_np.shape[-1]
