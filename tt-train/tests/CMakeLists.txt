@@ -16,6 +16,7 @@ set(SOURCES
     model/bert_polymorphism_test.cpp
     model/bert_weight_loading_test.cpp
     model/bert_operator_test.cpp
+    model/bert_seq_cls_test.cpp
     ttnn_fixed/concat_op_test.cpp
     ttnn_fixed/distributed/distributed_ttnn_ops_test.cpp
     ttnn_fixed/trivial_ttnn_ops_test.cpp
