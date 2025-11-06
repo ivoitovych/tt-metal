@@ -99,7 +99,7 @@ class BERTSequenceClassificationValidator:
         # Set classifier weight
         classifier_weight_param = ttml_params["bert/classifier/weight"]
         # TTML expects [1, 1, out_features, in_features], HF provides [out_features, in_features]
-        weight_shape = classifier_weight_param.get_value().logical_shape()
+        weight_shape = classifier_weight_param.shape()  # Use shape() instead of get_value().logical_shape()
 
         # Pad num_labels to aligned size if needed
         num_labels_aligned = weight_shape[-2]
@@ -113,26 +113,15 @@ class BERTSequenceClassificationValidator:
             padded_bias[: self.num_labels] = hf_classifier_bias
             hf_classifier_bias = padded_bias
 
-        from ttml.core import from_vector
-
-        classifier_weight_param.set_value(
-            from_vector(
-                hf_classifier_weight.flatten().tolist(),
-                weight_shape,
-                classifier_weight_param.get_value().device(),
-            )
-        )
+        # Reshape to TTML format and create tensor from numpy
+        weight_reshaped = hf_classifier_weight.reshape(weight_shape)
+        classifier_weight_param.set_value_from_tensor(ttml.autograd.Tensor.from_numpy(weight_reshaped))
 
         # Set classifier bias
         classifier_bias_param = ttml_params["bert/classifier/bias"]
-        bias_shape = classifier_bias_param.get_value().logical_shape()
-        classifier_bias_param.set_value(
-            from_vector(
-                hf_classifier_bias.tolist(),
-                bias_shape,
-                classifier_bias_param.get_value().device(),
-            )
-        )
+        bias_shape = classifier_bias_param.shape()  # Use shape() instead of get_value().logical_shape()
+        bias_reshaped = hf_classifier_bias.reshape(bias_shape)
+        classifier_bias_param.set_value_from_tensor(ttml.autograd.Tensor.from_numpy(bias_reshaped))
 
         print("  ✓ Classifier weights copied successfully")
 
@@ -169,43 +158,21 @@ class BERTSequenceClassificationValidator:
             hf_logits = hf_outputs.logits.numpy()
 
         # TTML forward pass
-        from ttml.autograd import create_tensor
-        from ttml.core import from_vector, get_device
-
-        device = get_device()
-
         # Convert inputs to TTML tensors
-        input_ids_ttml = create_tensor(
-            from_vector(
-                input_ids_np.flatten().tolist(),
-                [self.batch_size, 1, 1, self.seq_len],
-                device,
-            )
-        )
+        input_ids_reshaped = input_ids_np.reshape(self.batch_size, 1, 1, self.seq_len).astype(np.float32)
+        input_ids_ttml = ttml.autograd.Tensor.from_numpy(input_ids_reshaped)
 
-        token_type_ids_ttml = create_tensor(
-            from_vector(
-                token_type_ids_np.flatten().tolist(),
-                [self.batch_size, 1, 1, self.seq_len],
-                device,
-            )
-        )
+        token_type_ids_reshaped = token_type_ids_np.reshape(self.batch_size, 1, 1, self.seq_len).astype(np.float32)
+        token_type_ids_ttml = ttml.autograd.Tensor.from_numpy(token_type_ids_reshaped)
 
-        attention_mask_ttml = create_tensor(
-            from_vector(
-                attention_mask_np.flatten().tolist(),
-                [self.batch_size, 1, 1, self.seq_len],
-                device,
-            )
-        )
+        attention_mask_reshaped = attention_mask_np.reshape(self.batch_size, 1, 1, self.seq_len).astype(np.float32)
+        attention_mask_ttml = ttml.autograd.Tensor.from_numpy(attention_mask_reshaped)
 
         # Forward pass
         ttml_logits = self.ttml_model(input_ids_ttml, attention_mask_ttml, token_type_ids_ttml)
 
         # Convert TTML output to numpy
-        from ttml.core import to_vector
-
-        ttml_logits_np = np.array(to_vector(ttml_logits.get_value())).reshape(self.batch_size, 1, 1, -1)
+        ttml_logits_np = ttml_logits.to_numpy()
 
         # Extract only actual labels (not padding)
         ttml_logits_np = ttml_logits_np[:, :, :, : self.num_labels]
