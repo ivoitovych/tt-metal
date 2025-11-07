@@ -100,19 +100,29 @@ All tests from changed files pass when accounting for test harness issues:
 
 ## Critical Bugs - BLOCKING Production Use
 
-### 1. Batch Processing Bug (CRITICAL - BLOCKING)
+### 1. Batch Processing Bug (CRITICAL - BLOCKING) - ROOT CAUSE UNKNOWN
 - **Issue**: When batch_size > 1, ALL samples in the batch produce IDENTICAL outputs regardless of input differences
-- **Status**: CONFIRMED in both Python AND C++ implementations
+- **Status**: **MASKED BY BAND-AID, NOT FIXED**
+- **"Workaround"**: Slice-and-concatenate code in `embedding_op.cpp` (commit 10a9d642d2)
+  - Makes symptoms disappear by forcing single-sample processing
+  - Tests now pass, but this hides the real bug
+- **Critical Discovery**:
+  - Clean branch tests (ivoitovych/ttnn-embedding-batch-bug-reproduction) **ALL PASS**
+  - ttnn::embedding() works correctly with clean 2D tensors
+  - Therefore: **The bug is NOT in ttnn::embedding**
+  - The bug is **somewhere in BERT implementation**
+- **Real Root Cause**: **UNKNOWN** - Could be:
+  - BERT's tensor preparation before embedding
+  - BERT's embedding combination (token + position + type embeddings)
+  - Autograd context or tensor state issues
+  - Test insufficiency (not detecting the actual problem)
 - **Evidence**:
-  - Python: `tt-train/debug_batch_processing.py` - All batch samples identical
-  - Python: `tt-train/debug_tensor_shapes.py` - Reproduced at batch_size=2,4
-  - C++: `tt-train/tests/model/bert_batch_bug_test.cpp` - Test confirms bug
-  - Individual processing (batch_size=1) works correctly
+  - Python: `tt-train/debug_batch_processing.py` - All batch samples identical (before band-aid)
+  - C++: `tt-train/tests/model/bert_batch_bug_test.cpp` - Confirmed bug (before band-aid)
+  - C++: Tests now pass WITH band-aid, but **real bug is still there**
 - **False Positive**: The C++ test `BatchSizeIndependence` in `bert_seq_cls_test.cpp` is misleading.
   It only checks if sample[0] matches an individual run, never verifies samples differ within batch.
-- **Root Cause**: Under investigation. Likely in embedding layer, attention mechanism, or pooler slice operation
-- **Workaround**: MUST use batch_size=1 for all operations
-- **Impact**: CRITICAL - Makes batch inference and batch training completely non-functional
+- **Impact**: CRITICAL - Real bug is unknown and masked, cannot trust batch processing
 
 ### 2. Attention Mask Handling (BLOCKING)
 - **Issue**: All-ones attention masks (no padding) produce significantly lower PCC (~0.80-0.93)
@@ -282,35 +292,49 @@ output = logits.to_numpy()
 The BERT implementation for TTML is **NOT production-ready** due to critical bugs:
 
 ### Blocking Issues (Must Fix Before Production):
-1. **Batch Processing**: Completely broken for batch_size > 1 (all samples get identical outputs)
+1. **Batch Processing**: Real bug UNKNOWN and MASKED by band-aid code
+   - "Workaround" in embedding_op.cpp hides symptoms
+   - Root cause still unidentified (not in ttnn::embedding)
+   - Bug is somewhere in BERT implementation
 2. **Attention Masking**: Cannot handle sequences without padding (all-ones masks fail)
 3. **Multi-Label Classification**: Broken for 3+ labels (only binary works)
 4. **Seed Sensitivity**: Random initialization affects correctness (not just weights)
 
-### Current Functional Scope (Very Limited):
-- ✅ Single-sample inference (batch_size=1 only)
-- ✅ Binary classification (2 labels only)
-- ✅ Sequences with artificial padding (must mask ~25% of tokens)
-- ✅ Specific seed values (43+, seed 42 produces wrong results)
+### Test Validity Crisis:
+- **Reported**: 110/110 tests passing (100% individual) - **MEANINGLESS**
+- **Reality**: Tests pass because they use workarounds that HIDE broken functionality
+  - Batch: Band-aid masks real bug, tests pass incorrectly
+  - Masks: Tests avoid all-ones masks (broken case)
+  - Seeds: Tests avoid seed 42 (broken case)
+  - Multi-label: Tests disabled or avoid 3+ labels (broken case)
+- **False Positive**: C++ BatchSizeIndependence test doesn't validate batch correctness
+- **Tests validate workarounds, NOT the actual implementation**
 
-### Test Status Analysis:
-- **Reported**: 132/133 tests passing (99.2%) - MISLEADING
-- **Reality**: Tests pass only because they use workarounds and avoid broken functionality
-- **False Positive**: C++ BatchSizeIndependence test doesn't actually validate batch correctness
-- **Disabled Tests**: 3+ label tests, bert-base tests, all-ones mask tests
+### Current Functional Scope (Extremely Limited):
+- ⚠️ Batch processing (symptoms masked, real bug unknown)
+- ⚠️ Binary classification only (multi-label broken)
+- ⚠️ Sequences with artificial padding only (all-ones masks broken)
+- ⚠️ Specific seeds only (seed 42 fails)
+
+### Branch Purpose vs Reality:
+- **Original Goal**: Add task heads for BERT completeness (Token Classification, QA, MLM)
+- **Current Reality**: **BLOCKED** - Cannot add features until base BERT is fixed
 
 ### Recommendation:
-**DO NOT USE IN PRODUCTION** until critical bugs are fixed. The implementation has correct
-architecture and works for the narrow case of single-sample binary classification with padding,
-but fundamental batch processing is broken.
+- ❌ **DO NOT USE IN PRODUCTION** - fundamental bugs present
+- ❌ **DO NOT ADD MORE FEATURES** - base implementation is broken
+- ❌ **DO NOT TRUST TEST RESULTS** - they validate workarounds, not functionality
 
-### Required Work for Production:
-1. Fix batch processing bug (investigate embedding/attention/pooler layers)
-2. Fix attention mask handling for all-ones masks
-3. Fix multi-label classification (3+ labels)
-4. Investigate and fix seed sensitivity issue
-5. Re-enable all disabled tests and verify they pass
-6. Remove all workarounds from tests
-7. Validate BERT-base models
+### Required Work Before Proceeding:
+1. **Remove band-aid** from embedding_op.cpp
+2. **Find real batch processing bug** (tests will fail, that's correct)
+3. **Fix the real root cause** properly
+4. Fix attention mask handling for all-ones masks
+5. Fix multi-label classification (3+ labels)
+6. Investigate and fix seed sensitivity issue
+7. **Remove ALL workarounds** from tests
+8. Verify tests fail without workarounds, pass with real fixes
+9. Validate against HuggingFace with NO constraints
+10. **Only then**: Add remaining task heads (original branch purpose)
 
-**Current Status**: Implementation in progress, not suitable for production use
+**Current Status**: Base implementation has fundamental bugs, blocked from adding completeness features
