@@ -268,17 +268,56 @@
 
 ## Conclusion
 
-**BERT Implementation Status**: ✅ **PRODUCTION READY** (with workaround)
+**BERT Implementation Status**: ❌ **NOT PRODUCTION READY** - Critical Bugs Remain
 
-- All 110 functional tests pass when run individually
-- Critical batch processing bug has working workaround
-- 98.2% pass rate in batch execution (failures are test infrastructure issues)
-- Comprehensive test coverage across all BERT components
-- Successfully validates against HuggingFace weight loading
+### Bugs Fixed
+1. ✅ **Batch Processing Bug** (FIXED via workaround in commit 10a9d642d2)
+   - Issue: All samples in batch produced identical outputs
+   - Root cause: ttnn::embedding() library bug
+   - Fix: Slice-and-concatenate workaround in embedding_op.cpp
+   - Status: C++ tests now pass with different outputs for different batch samples
 
-**Workaround Status**: Required until ttnn::embedding batch bug is fixed in TTNN library
+### Critical Bugs Still Present (from BERT_IMPLEMENTATION_STATUS.md)
 
-**Next Steps**:
-1. Fix test infrastructure cleanup issues
-2. Report ttnn::embedding bug to TTNN team
-3. Monitor for TTNN fix to remove workaround
+2. ❌ **Attention Mask Handling** (BLOCKING)
+   - Issue: All-ones masks (no padding) produce poor PCC (~0.80-0.93)
+   - Workaround: Tests artificially mask last 25% of tokens
+   - Impact: Real sequences without padding cannot be processed accurately
+   - Status: UNFIXED
+
+3. ❌ **Seed Sensitivity** (BLOCKING for testing)
+   - Issue: Seed 42 produces completely wrong results (PCC = -1.0)
+   - Workaround: Tests use seed 43+
+   - Impact: Indicates potential non-determinism bug
+   - Status: UNFIXED
+
+4. ⚠️ **Multi-Label Classification** (Status Unclear)
+   - Issue: 3+ labels show PCC ~0.93 in Python
+   - C++ Status: Works correctly (all multi-label tests pass)
+   - Python Status: Fails (likely Python binding issue)
+   - Impact: Restricts Python use to binary classification only
+   - Status: C++ works, Python broken
+
+### Test Results Summary
+- **C++ Tests**: 108/110 pass in batch, 110/110 pass individually (98.2% batch / 100% individual)
+- **Test Failures**: 2 failures due to device cleanup (not BERT bugs)
+- **False Positive Test**: BatchSizeIndependence previously only checked batch[0] vs individual
+- **Workarounds in Tests**: Artificial padding, seed constraints, batch_size=1
+
+### Current Functional Scope (Very Limited)
+Per BERT_IMPLEMENTATION_STATUS.md:
+- ✅ Single-sample inference (batch_size=1) - Now works with workaround for batch_size>1
+- ✅ Binary classification (2 labels only in Python; multi-label works in C++)
+- ✅ Sequences with padding (must mask ~25% of tokens)
+- ✅ Specific seeds (43+, NOT seed 42)
+
+### Required Work for Production
+1. Fix attention mask handling for all-ones masks
+2. Fix seed sensitivity issue
+3. Fix Python bindings for multi-label classification (or confirm C++ only)
+4. Remove all test workarounds and verify they still pass
+5. Validate BERT-base models
+6. Report ttnn::embedding bug to TTNN team for proper fix
+7. Remove workaround once TTNN library is fixed
+
+**Recommendation**: DO NOT USE IN PRODUCTION until remaining critical bugs are fixed.
