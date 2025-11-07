@@ -10,6 +10,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "models/bert.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/dropout_op.hpp"
 #include "ops/embedding_op.hpp"
@@ -184,8 +185,154 @@ TEST_F(BertEmbeddingPipelineTest, FullPipelineStepByStep) {
 }
 
 // Test if the bug appears when processing through an actual BERT model
-TEST_F(BertEmbeddingPipelineTest, CompareDirectPipelineVsBertModel) {
-    std::cout << "\n=== This test requires actual BERT model integration ===\n";
-    std::cout << "To implement: Compare direct pipeline (above test) vs BERT model's get_embeddings()\n";
-    std::cout << "Expected: If direct pipeline works but BERT model fails, bug is in BERT's wiring/state\n";
+TEST_F(BertEmbeddingPipelineTest, BertModelGetEmbeddings) {
+    using namespace ttml;
+    using namespace ttml::models::bert;
+    auto* device = &autograd::ctx().get_device();
+
+    constexpr uint32_t vocab_size = 100;
+    constexpr uint32_t batch_size = 2;
+    constexpr uint32_t seq_len = 32;
+    constexpr uint32_t emb_dim = 64;
+
+    std::cout << "\n=== BERT Model get_embeddings() Test ===\n";
+    std::cout << "Configuration: batch_size=" << batch_size << ", seq_len=" << seq_len << ", emb_dim=" << emb_dim
+              << "\n\n";
+
+    // Create BERT model with ZERO transformer blocks (just embeddings)
+    BertConfig config;
+    config.vocab_size = vocab_size;
+    config.max_sequence_length = seq_len;
+    config.embedding_dim = emb_dim;
+    config.intermediate_size = 256;
+    config.num_heads = 4;
+    config.num_blocks = 0;  // NO transformer blocks - test embeddings only!
+    config.dropout_prob = 0.0F;
+    config.layer_norm_eps = 1e-12F;
+    config.use_token_type_embeddings = true;
+
+    auto bert_model = std::make_shared<Bert>(config);
+
+    // Create input_ids: batch 0 = token 7, batch 1 = token 99
+    std::vector<uint32_t> input_data(batch_size * seq_len);
+    for (uint32_t i = 0; i < seq_len; ++i) {
+        input_data[i] = 7;  // Sample 0
+    }
+    for (uint32_t i = seq_len; i < 2 * seq_len; ++i) {
+        input_data[i] = 99;  // Sample 1
+    }
+
+    auto input_ids = autograd::create_tensor(core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        input_data, ttnn::Shape({batch_size, 1, 1, seq_len}), device, ttnn::Layout::ROW_MAJOR));
+
+    // Create token_type_ids (all zeros)
+    std::vector<uint32_t> token_type_data(batch_size * seq_len, 0);
+    auto token_type_ids = autograd::create_tensor(core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        token_type_data, ttnn::Shape({batch_size, 1, 1, seq_len}), device, ttnn::Layout::ROW_MAJOR));
+
+    std::cout << "Input:\n";
+    std::cout << "  Sample 0: all tokens = 7\n";
+    std::cout << "  Sample 1: all tokens = 99\n\n";
+
+    // Call BERT's get_embeddings() method
+    auto embeddings = bert_model->get_embeddings(input_ids, token_type_ids);
+    auto emb_vec = core::to_vector(embeddings->get_value());
+
+    float sample0_val = emb_vec[0];
+    float sample1_val = emb_vec[seq_len * emb_dim];
+
+    std::cout << "BERT Model get_embeddings() Output:\n";
+    std::cout << "  Sample 0 first value: " << sample0_val << "\n";
+    std::cout << "  Sample 1 first value: " << sample1_val << "\n";
+
+    if (std::abs(sample0_val - sample1_val) < 0.01F) {
+        std::cout << "\n❌ BUG FOUND: BERT model's get_embeddings() produces identical outputs!\n";
+        std::cout << "   Direct pipeline works (previous test), but BERT model fails.\n";
+        std::cout << "   Bug is in BERT model's embedding wiring or state management.\n\n";
+        FAIL() << "BERT model get_embeddings() bug detected";
+    } else {
+        std::cout << "\n✓ BERT model's get_embeddings() works correctly!\n";
+        std::cout << "   Different inputs produce different embeddings.\n";
+        std::cout << "   Bug must be in transformer blocks or pooler, NOT embeddings.\n\n";
+    }
+}
+
+// Test if the bug appears when adding transformer blocks
+TEST_F(BertEmbeddingPipelineTest, BertModelWithTransformerBlocks) {
+    using namespace ttml;
+    using namespace ttml::models::bert;
+    auto* device = &autograd::ctx().get_device();
+
+    constexpr uint32_t vocab_size = 100;
+    constexpr uint32_t batch_size = 2;
+    constexpr uint32_t seq_len = 32;
+    constexpr uint32_t emb_dim = 64;
+
+    std::cout << "\n=== BERT Model with Transformer Blocks Test ===\n";
+    std::cout << "Configuration: batch_size=" << batch_size << ", seq_len=" << seq_len << ", emb_dim=" << emb_dim
+              << "\n\n";
+
+    // Create BERT model with 1 transformer block
+    BertConfig config;
+    config.vocab_size = vocab_size;
+    config.max_sequence_length = seq_len;
+    config.embedding_dim = emb_dim;
+    config.intermediate_size = 256;
+    config.num_heads = 4;
+    config.num_blocks = 1;  // Add 1 transformer block to test
+    config.dropout_prob = 0.0F;
+    config.layer_norm_eps = 1e-12F;
+    config.use_token_type_embeddings = true;
+    config.use_pooler = false;  // No pooler yet
+
+    auto bert_model = std::make_shared<Bert>(config);
+
+    // Create input_ids: batch 0 = token 7, batch 1 = token 99
+    std::vector<uint32_t> input_data(batch_size * seq_len);
+    for (uint32_t i = 0; i < seq_len; ++i) {
+        input_data[i] = 7;  // Sample 0
+    }
+    for (uint32_t i = seq_len; i < 2 * seq_len; ++i) {
+        input_data[i] = 99;  // Sample 1
+    }
+
+    auto input_ids = autograd::create_tensor(core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        input_data, ttnn::Shape({batch_size, 1, 1, seq_len}), device, ttnn::Layout::ROW_MAJOR));
+
+    // Create token_type_ids (all zeros)
+    std::vector<uint32_t> token_type_data(batch_size * seq_len, 0);
+    auto token_type_ids = autograd::create_tensor(core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        token_type_data, ttnn::Shape({batch_size, 1, 1, seq_len}), device, ttnn::Layout::ROW_MAJOR));
+
+    // Create attention mask (all ones - no padding)
+    std::vector<float> attention_mask_data(batch_size * seq_len, 1.0F);
+    auto attention_mask = autograd::create_tensor(
+        core::from_vector(attention_mask_data, ttnn::Shape({batch_size, 1, 1, seq_len}), device));
+
+    std::cout << "Input:\n";
+    std::cout << "  Sample 0: all tokens = 7\n";
+    std::cout << "  Sample 1: all tokens = 99\n";
+    std::cout << "  Attention mask: all ones (no padding)\n\n";
+
+    // Call BERT forward (goes through embeddings + 1 transformer block)
+    auto output = (*bert_model)(input_ids, attention_mask, token_type_ids);
+    auto output_vec = core::to_vector(output->get_value());
+
+    float sample0_val = output_vec[0];
+    float sample1_val = output_vec[seq_len * emb_dim];
+
+    std::cout << "BERT Model Output (embeddings + 1 transformer block):\n";
+    std::cout << "  Sample 0 first value: " << sample0_val << "\n";
+    std::cout << "  Sample 1 first value: " << sample1_val << "\n";
+
+    if (std::abs(sample0_val - sample1_val) < 0.01F) {
+        std::cout << "\n❌ BUG FOUND: Transformer block produces identical outputs!\n";
+        std::cout << "   Embeddings work (previous test), but transformer block fails.\n";
+        std::cout << "   Bug is in transformer block (attention or FFN).\n\n";
+        FAIL() << "Transformer block batch processing bug detected";
+    } else {
+        std::cout << "\n✓ Transformer block works correctly!\n";
+        std::cout << "   Different inputs produce different outputs.\n";
+        std::cout << "   Bug must be in pooler or classification head, NOT transformer.\n\n";
+    }
 }
