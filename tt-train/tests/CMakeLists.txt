@@ -9,6 +9,7 @@ set(SOURCES
     core/tile_layout_round_trip_test.cpp
     core/ttnn_embedding_batch_bug_test.cpp
     core/broadcasting_hypothesis_test.cpp
+    core/bert_embedding_pipeline_test.cpp
     model/linear_regression_ddp_test.cpp
     model/nano_gpt_test.cpp
     model/model_names_test.cpp
