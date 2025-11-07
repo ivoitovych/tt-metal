@@ -8,6 +8,7 @@ set(SOURCES
     core/clip_grad_norm_test.cpp
     core/tile_layout_round_trip_test.cpp
     core/ttnn_embedding_batch_bug_test.cpp
+    core/broadcasting_hypothesis_test.cpp
     model/linear_regression_ddp_test.cpp
     model/nano_gpt_test.cpp
     model/model_names_test.cpp
