@@ -148,8 +148,9 @@ def test_batch_independence():
     print(f"HF outputs different? {not np.allclose(hf_logits[0], hf_logits[1], rtol=1e-3)}")
 
     # TTML forward pass
-    input_ids_reshaped = input_ids_np.reshape(batch_size, 1, 1, seq_len).astype(np.float32)
-    token_type_ids_reshaped = token_type_ids_np.reshape(batch_size, 1, 1, seq_len).astype(np.float32)
+    # IMPORTANT: Token IDs must be integers (uint32/int32), NOT float32!
+    input_ids_reshaped = input_ids_np.reshape(batch_size, 1, 1, seq_len).astype(np.uint32)
+    token_type_ids_reshaped = token_type_ids_np.reshape(batch_size, 1, 1, seq_len).astype(np.uint32)
     attention_mask_reshaped = attention_mask_np.reshape(batch_size, 1, 1, seq_len).astype(np.float32)
 
     print(f"\nTTML input shape: {input_ids_reshaped.shape}")

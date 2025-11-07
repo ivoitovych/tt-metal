@@ -77,21 +77,22 @@ TEST_F(BertBatchBugTest, DifferentInputsProduceDifferentOutputs) {
     const size_t batch_size = 2;
 
     // Create batch with VERY DIFFERENT inputs
-    std::vector<float> input_ids_batch(batch_size * seq_len);
-    std::vector<float> token_type_ids_batch(batch_size * seq_len);
+    // IMPORTANT: Token IDs must be uint32, not float!
+    std::vector<uint32_t> input_ids_batch(batch_size * seq_len);
+    std::vector<uint32_t> token_type_ids_batch(batch_size * seq_len);
     std::vector<float> attention_mask_batch(batch_size * seq_len);
 
     // First sample: all token ID = 7
     for (size_t i = 0; i < seq_len; ++i) {
-        input_ids_batch[i] = 7.0F;
-        token_type_ids_batch[i] = 0.0F;
+        input_ids_batch[i] = 7;
+        token_type_ids_batch[i] = 0;
         attention_mask_batch[i] = 1.0F;
     }
 
     // Second sample: all token ID = 99 (very different from 7)
     for (size_t i = seq_len; i < 2 * seq_len; ++i) {
-        input_ids_batch[i] = 99.0F;
-        token_type_ids_batch[i] = 0.0F;
+        input_ids_batch[i] = 99;
+        token_type_ids_batch[i] = 0;
         attention_mask_batch[i] = 1.0F;
     }
 
@@ -99,11 +100,11 @@ TEST_F(BertBatchBugTest, DifferentInputsProduceDifferentOutputs) {
     std::cout << "Sample 0: all tokens = 7" << std::endl;
     std::cout << "Sample 1: all tokens = 99" << std::endl;
 
-    // Create batched tensors
-    auto input_ids_tensor =
-        core::from_vector(input_ids_batch, ttnn::Shape{2, 1, 1, seq_len}, &autograd::ctx().get_device());
-    auto token_type_ids_tensor =
-        core::from_vector(token_type_ids_batch, ttnn::Shape{2, 1, 1, seq_len}, &autograd::ctx().get_device());
+    // Create batched tensors with correct dtypes
+    auto input_ids_tensor = core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        input_ids_batch, ttnn::Shape{2, 1, 1, seq_len}, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
+    auto token_type_ids_tensor = core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        token_type_ids_batch, ttnn::Shape{2, 1, 1, seq_len}, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
     auto attention_mask_tensor =
         core::from_vector(attention_mask_batch, ttnn::Shape{2, 1, 1, seq_len}, &autograd::ctx().get_device());
 

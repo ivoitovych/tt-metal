@@ -78,21 +78,22 @@ TEST_F(BertBatchIsolationTest, EmbeddingLayerBatchHandling) {
     const size_t seq_len = 32;
 
     // Create batch with VERY different inputs
-    std::vector<float> input_ids_batch(batch_size * seq_len);
-    std::vector<float> token_type_ids_batch(batch_size * seq_len);
+    // IMPORTANT: Token IDs must be uint32, not float!
+    std::vector<uint32_t> input_ids_batch(batch_size * seq_len);
+    std::vector<uint32_t> token_type_ids_batch(batch_size * seq_len);
     std::vector<float> attention_mask_batch(batch_size * seq_len);
 
     // Sample 0: all token ID = 7
     for (size_t i = 0; i < seq_len; ++i) {
-        input_ids_batch[i] = 7.0F;
-        token_type_ids_batch[i] = 0.0F;
+        input_ids_batch[i] = 7;
+        token_type_ids_batch[i] = 0;
         attention_mask_batch[i] = 1.0F;
     }
 
     // Sample 1: all token ID = 99 (very different!)
     for (size_t i = seq_len; i < 2 * seq_len; ++i) {
-        input_ids_batch[i] = 99.0F;
-        token_type_ids_batch[i] = 0.0F;
+        input_ids_batch[i] = 99;
+        token_type_ids_batch[i] = 0;
         attention_mask_batch[i] = 1.0F;
     }
 
@@ -100,11 +101,17 @@ TEST_F(BertBatchIsolationTest, EmbeddingLayerBatchHandling) {
     std::cout << "  Sample 0: all tokens = 7" << std::endl;
     std::cout << "  Sample 1: all tokens = 99" << std::endl;
 
-    // Create tensors
-    auto input_ids_tensor =
-        core::from_vector(input_ids_batch, ttnn::Shape{batch_size, 1, 1, seq_len}, &autograd::ctx().get_device());
-    auto token_type_ids_tensor =
-        core::from_vector(token_type_ids_batch, ttnn::Shape{batch_size, 1, 1, seq_len}, &autograd::ctx().get_device());
+    // Create tensors with correct dtypes
+    auto input_ids_tensor = core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        input_ids_batch,
+        ttnn::Shape{batch_size, 1, 1, seq_len},
+        &autograd::ctx().get_device(),
+        ttnn::Layout::ROW_MAJOR);
+    auto token_type_ids_tensor = core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        token_type_ids_batch,
+        ttnn::Shape{batch_size, 1, 1, seq_len},
+        &autograd::ctx().get_device(),
+        ttnn::Layout::ROW_MAJOR);
     auto attention_mask_tensor =
         core::from_vector(attention_mask_batch, ttnn::Shape{batch_size, 1, 1, seq_len}, &autograd::ctx().get_device());
 
@@ -167,22 +174,29 @@ TEST_F(BertBatchIsolationTest, PoolerBatchHandling) {
     const size_t seq_len = 32;
 
     // Create batch with different inputs
-    std::vector<float> input_ids_batch(batch_size * seq_len);
-    std::vector<float> token_type_ids_batch(batch_size * seq_len);
+    // IMPORTANT: Token IDs must be uint32, not float!
+    std::vector<uint32_t> input_ids_batch(batch_size * seq_len);
+    std::vector<uint32_t> token_type_ids_batch(batch_size * seq_len);
 
     for (size_t i = 0; i < seq_len; ++i) {
-        input_ids_batch[i] = 7.0F;
-        token_type_ids_batch[i] = 0.0F;
+        input_ids_batch[i] = 7;
+        token_type_ids_batch[i] = 0;
     }
     for (size_t i = seq_len; i < 2 * seq_len; ++i) {
-        input_ids_batch[i] = 99.0F;
-        token_type_ids_batch[i] = 0.0F;
+        input_ids_batch[i] = 99;
+        token_type_ids_batch[i] = 0;
     }
 
-    auto input_ids_tensor =
-        core::from_vector(input_ids_batch, ttnn::Shape{batch_size, 1, 1, seq_len}, &autograd::ctx().get_device());
-    auto token_type_ids_tensor =
-        core::from_vector(token_type_ids_batch, ttnn::Shape{batch_size, 1, 1, seq_len}, &autograd::ctx().get_device());
+    auto input_ids_tensor = core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        input_ids_batch,
+        ttnn::Shape{batch_size, 1, 1, seq_len},
+        &autograd::ctx().get_device(),
+        ttnn::Layout::ROW_MAJOR);
+    auto token_type_ids_tensor = core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        token_type_ids_batch,
+        ttnn::Shape{batch_size, 1, 1, seq_len},
+        &autograd::ctx().get_device(),
+        ttnn::Layout::ROW_MAJOR);
 
     auto input_ids_ag = autograd::create_tensor(input_ids_tensor);
     auto token_type_ids_ag = autograd::create_tensor(token_type_ids_tensor);
