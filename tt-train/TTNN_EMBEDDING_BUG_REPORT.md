@@ -242,6 +242,66 @@ BertBatchBugTest.DifferentInputsProduceDifferentOutputs:
 
 This context-dependency makes the bug harder to isolate but confirms it exists in production BERT usage, making the workaround necessary.
 
+### Comparison with PR Branch
+
+**Timeline Analysis** - How the bug was discovered after PR creation:
+
+#### Commit eca8b5a8f1 (PR Branch Base - Before BERT)
+```cpp
+// embedding_op.cpp - Simple implementation
+auto embeddings = ttnn::embedding(tensor->get_value(), weight_tensor, nullopt, TILE);
+auto weight_grad = ttnn::embedding_bw(tensor->get_value(), weight->get_value(), out_grad);
+// No ROW_MAJOR layout fix, No workaround
+```
+- This is main branch before BERT implementation started
+- Has the batch bug (undetected)
+
+#### Commit 4448e84e9b (PR Branch Head - Squashed PR)
+```cpp
+// embedding_op.cpp - Added layout fix
+auto embeddings = ttnn::embedding(tensor->get_value(), weight_tensor, nullopt, TILE);
+
+// NEW: Layout fix for backward pass
+auto tensor_value = tensor->get_value();
+if (tensor_value.layout() != ttnn::Layout::ROW_MAJOR) {
+    tensor_value = ttnn::to_layout(tensor_value, ttnn::Layout::ROW_MAJOR);
+}
+auto weight_grad = ttnn::embedding_bw(tensor_value, weight->get_value(), out_grad);
+// No workaround yet
+```
+- PR contains ROW_MAJOR layout fix for backward pass
+- Still has batch bug (undetected)
+- **12 BERT tests, ALL PASS** - but all use batch_size=1
+- Tests: BertPolymorphismTest (8), BertWeightLoadingTest (4)
+- Input shapes: `{1, 1, 1, seq_len}` in all tests
+- None check batch independence (different inputs in same batch)
+
+#### Current Branch (After Bug Discovery)
+```cpp
+// embedding_op.cpp - With workaround
+if (batch_size == 1) {
+    // Direct path
+} else {
+    // WORKAROUND: slice, process individually, concat
+    for each sample: slice -> embed -> concat
+}
+```
+- **21 BERT tests, ALL PASS** with workaround
+- **Additional tests** that caught the bug:
+  - `bert_seq_cls_test.cpp` - BatchSizeIndependence (checks batch[0] != batch[1])
+  - `bert_batch_bug_test.cpp` - DifferentInputsProduceDifferentOutputs
+  - `bert_batch_isolation_test.cpp` - EmbeddingLayerBatchHandling
+  - `ttnn_embedding_batch_bug_test.cpp` - Direct ttnn::embedding tests
+
+**Why Bug Wasn't Caught Earlier**:
+The PR tests only validated:
+- Single sample correctness (batch_size=1)
+- Weight loading mechanics
+- Polymorphism functionality
+- Gradient flow with batch_size=1
+
+They never tested: "Do different inputs in the same batch produce different outputs?"
+
 ---
 
 ## Reproduction Steps
