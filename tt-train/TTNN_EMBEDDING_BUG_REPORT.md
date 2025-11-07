@@ -163,27 +163,84 @@ if (batch_size == 1) {
 
 ## Test Results
 
-### Before Workaround
+### Verification Results (2025-11-07)
+
+**Bug verified and confirmed reproducible in BERT context.**
+
+#### WITHOUT Workaround (Bug Confirmed)
+
+**Test 1: Embedding Layer Isolation**
 ```
 BertBatchIsolationTest.EmbeddingLayerBatchHandling:
-  Sample 0 (token 7):  [0.45, 1.23, -0.89, ...]
-  Sample 1 (token 99): [0.45, 1.23, -0.89, ...]  // IDENTICAL - BUG!
-  ❌ FAILED
+  Input: Sample 0 = all tokens 7, Sample 1 = all tokens 99
+  Sample 0 first token: [-1.52344, -0.341797, -1.10938, 0.0634766, -0.318359, ...]
+  Sample 1 first token: [-1.52344, -0.341797, -1.10938, 0.0634766, -0.318359, ...]
+  ❌ FAILED: IDENTICAL embeddings for different token IDs
 ```
 
-### After Workaround
+**Test 2: End-to-End BERT Model**
+```
+BertBatchBugTest.DifferentInputsProduceDifferentOutputs:
+  Input: Sample 0 = all tokens 7, Sample 1 = all tokens 99
+  Sample 0 logits: [-0.0032196, -0.0245361]
+  Sample 1 logits: [-0.0032196, -0.0245361]
+  Max difference: 0.0
+  ❌ FAILED: Bug cascades through entire BERT network
+```
+
+**Test 3: Batch Independence Check**
+```
+BertSeqClsTest.BatchSizeIndependence:
+  batch[0]: [-0.0032196, -0.0245361, -0.00756836, 0.00634766, -0.0446777]
+  batch[1]: [-0.0032196, -0.0245361, -0.00756836, 0.00634766, -0.0446777]
+  Max difference: 0.0
+  ⚠️  PASSES but logs identical outputs
+```
+
+#### WITH Workaround (All Tests Pass)
+
+**Embedding Layer Isolation**
 ```
 BertBatchIsolationTest.EmbeddingLayerBatchHandling:
-  Sample 0 (token 7):  [0.20, 1.98, -1.18, ...]
-  Sample 1 (token 99): [0.16, 0.44, -1.72, ...]  // DIFFERENT - CORRECT!
-  ✓ PASSED
+  Sample 0 (token 7):  [0.201, 1.984, -1.180, ...]
+  Sample 1 (token 99): [0.162, 0.441, -1.719, ...]
+  ✓ PASSED: Different embeddings for different tokens
 ```
 
-### All BERT Tests
+**End-to-End BERT Model**
+```
+BertBatchBugTest.DifferentInputsProduceDifferentOutputs:
+  Max difference: 0.051
+  ✓ PASSED: Outputs correctly different
+```
+
+**All BERT Tests**
 ```
 [==========] 21 tests from 6 test suites
 [  PASSED  ] 21 tests  (100%)
 ```
+
+### Key Finding: Context-Specific Bug
+
+**Important Discovery**: The bug reproduces in BERT context but NOT in clean, isolated tests.
+
+- **Clean branch** (`ivoitovych/ttnn-embedding-batch-bug-reproduction`): All tests PASS
+  - Direct `ttnn::embedding()` calls with 2D tensors: Works correctly
+  - 4D tensor inputs reshaped to 2D: Works correctly
+  - Conclusion: Bug is NOT reproducible with simple, clean tensor operations
+
+- **BERT branch** (this branch): Bug reproduces WITHOUT workaround
+  - Embedding layer in BERT context: Bug confirmed
+  - Full BERT model: Bug cascades through network
+  - Conclusion: Bug appears in BERT's specific tensor data flow
+
+**Hypothesis**: The bug may be triggered by specific tensor conditions created by BERT's operations:
+- Tensors passed through multiple BERT-specific reshape/layout operations
+- Interaction with autograd gradient tracking context
+- Specific tensor memory layouts after BERT's data preprocessing
+- Tensor state from BERT's token type embeddings or position embeddings
+
+This context-dependency makes the bug harder to isolate but confirms it exists in production BERT usage, making the workaround necessary.
 
 ---
 
