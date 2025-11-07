@@ -101,28 +101,82 @@ All tests from changed files pass when accounting for test harness issues:
 ## Critical Bugs - BLOCKING Production Use
 
 ### 1. Batch Processing Bug (CRITICAL - BLOCKING) - ROOT CAUSE UNKNOWN
+
+**Last Updated**: 2025-11-07 (Progressive isolation testing completed)
+
 - **Issue**: When batch_size > 1, ALL samples in the batch produce IDENTICAL outputs regardless of input differences
 - **Status**: **MASKED BY BAND-AID, NOT FIXED**
 - **"Workaround"**: Slice-and-concatenate code in `embedding_op.cpp` (commit 10a9d642d2)
   - Makes symptoms disappear by forcing single-sample processing
   - Tests now pass, but this hides the real bug
-- **Critical Discovery**:
-  - Clean branch tests (ivoitovych/ttnn-embedding-batch-bug-reproduction) **ALL PASS**
+
+#### Investigation Progress (2025-11-07)
+
+**Components Verified Working** (via progressive isolation tests):
+
+1. ✅ **Direct Operations** (`tests/core/broadcasting_hypothesis_test.cpp`):
+   - ops::embedding_op with batch=2: WORKS (sample0: 4.47, sample1: 63.25)
+   - ops::add broadcasting [1,1,seq,emb] → [batch,1,seq,emb]: WORKS (11.0 vs 12.0)
+   - ttnn::embedding with 4D inputs: WORKS (4.47 vs 63.25)
+
+2. ✅ **Manual Embedding Pipeline** (`tests/core/bert_embedding_pipeline_test.cpp`):
+   - Step 1 - Token embeddings: WORKS (4.47 vs 63.25)
+   - Step 2 - Add positions: WORKS (4.47 vs 63.25)
+   - Step 3 - Add token types: WORKS (4.53 vs 63.25)
+   - Step 4 - Layer norm: WORKS (-2.22 vs -1.84)
+   - Step 5 - Dropout: WORKS (-2.22 vs -1.84)
+
+3. ✅ **BERT Model Components**:
+   - BERT.get_embeddings() with batch=2: WORKS (-1.52 vs -0.94)
+   - BERT with 1 transformer block: WORKS (0.79 vs 0.24)
+   - Full BertForSequenceClassification: WORKS (with workaround)
+
+**Critical Conclusion**:
+- Bug is NOT in individual operations (all work correctly in isolation)
+- Bug is NOT in BERT component wiring (get_embeddings works)
+- Bug is NOT in transformer blocks (attention + FFN work)
+- **Workaround successfully masks symptoms** - all tests pass
+
+**Root Cause**: **STILL UNKNOWN**
+- Cannot reproduce bug with workaround in place
+- Must remove workaround to expose bug for diagnosis
+- See `BATCH_BUG_ROOT_CAUSE_INVESTIGATION_PLAN.md` for systematic removal plan
+
+#### Previous Investigation
+
+- **Clean branch tests** (ivoitovych/ttnn-embedding-batch-bug-reproduction) **ALL PASS**
   - ttnn::embedding() works correctly with clean 2D tensors
-  - Therefore: **The bug is NOT in ttnn::embedding**
+  - Therefore: **Bug is NOT in ttnn::embedding**
   - The bug is **somewhere in BERT implementation**
-- **Real Root Cause**: **UNKNOWN** - Could be:
-  - BERT's tensor preparation before embedding
-  - BERT's embedding combination (token + position + type embeddings)
-  - Autograd context or tensor state issues
-  - Test insufficiency (not detecting the actual problem)
-- **Evidence**:
-  - Python: `tt-train/debug_batch_processing.py` - All batch samples identical (before band-aid)
-  - C++: `tt-train/tests/model/bert_batch_bug_test.cpp` - Confirmed bug (before band-aid)
-  - C++: Tests now pass WITH band-aid, but **real bug is still there**
-- **False Positive**: The C++ test `BatchSizeIndependence` in `bert_seq_cls_test.cpp` is misleading.
-  It only checks if sample[0] matches an individual run, never verifies samples differ within batch.
-- **Impact**: CRITICAL - Real bug is unknown and masked, cannot trust batch processing
+
+#### Hypotheses (To Test After Removing Workaround)
+
+Could be:
+- Tensor shape issue (incorrect reshape collapses batch dimension)
+- Memory aliasing (batch samples point to same memory)
+- Autograd context issue (state not properly handling batches)
+- Broadcasting bug (duplicates instead of broadcasts in specific case)
+- Module state issue (shared state across batch samples)
+- Weight tensor issue (shape incompatible with batched input)
+
+#### Evidence
+
+- **Python**: `tt-train/debug_batch_processing.py` - NOW PASSES (workaround active)
+- **C++**: `tt-train/tests/model/bert_batch_bug_test.cpp` - PASSES (workaround active)
+- **C++**: `tt-train/tests/core/bert_embedding_pipeline_test.cpp` - ALL PASS (components work)
+- **False Positive**: `BatchSizeIndependence` test only checks batch[0] vs individual, never verifies batch samples differ
+
+#### Next Steps
+
+1. Remove workaround from `embedding_op.cpp`
+2. Re-run progressive isolation tests to find where bug manifests
+3. Diagnose root cause at failing component
+4. Implement proper fix (not workaround)
+5. Verify all tests pass without workarounds
+
+**Investigation Plan**: See `BATCH_BUG_ROOT_CAUSE_INVESTIGATION_PLAN.md`
+
+- **Impact**: CRITICAL - Real bug is unknown and masked, cannot trust batch processing without workaround
 
 ### 2. Attention Mask Handling (BLOCKING)
 - **Issue**: All-ones attention masks (no padding) produce significantly lower PCC (~0.80-0.93)
