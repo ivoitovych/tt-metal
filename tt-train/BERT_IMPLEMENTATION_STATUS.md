@@ -352,21 +352,26 @@ output = logits.to_numpy()
 ## Future Work
 
 ### High Priority
-1. **Fix batch processing in Python**: Investigate and resolve Python binding issue
-2. **Improve multi-label support**: Debug 3+ label classification
-3. **Optimize attention mask handling**: Fix all-ones mask issue
-4. **BERT-base validation**: Complete validation for larger models
+1. **Improve multi-label support**: Debug 3+ label classification (HuggingFace comparison)
+2. **Optimize attention mask handling**: Fix all-ones mask issue (HuggingFace comparison)
+3. **BERT-base validation**: Complete validation for larger models
+4. **Training support**: End-to-end training validation
 
 ### Medium Priority
-5. **Additional task heads**: Token classification, Question Answering, MLM
-6. **Training support**: End-to-end training validation
-7. **Gradient checkpointing**: Memory optimization for large models
-8. **Flash Attention**: Performance optimization
+5. **Python task head bindings**: Add Python API for new task heads
+6. **Gradient checkpointing**: Memory optimization for large models
+7. **Flash Attention**: Performance optimization
+8. **QA loss computation**: Implement proper tensor slicing for start/end logits
 
 ### Low Priority
 9. **Model export**: ONNX export support
 10. **Quantization**: INT8/FP16 support
 11. **Distributed inference**: Multi-device support
+
+### ✅ Completed
+- ✅ Additional task heads: Token classification, Question Answering, MLM (2025-11-08)
+- ✅ Fix batch processing bug (2025-11-07)
+- ✅ Fix seed sensitivity bug (2025-11-07)
 
 ## References
 

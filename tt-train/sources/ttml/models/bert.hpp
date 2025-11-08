@@ -156,4 +156,105 @@ public:
 [[nodiscard]] std::shared_ptr<BertForSequenceClassification> create_for_sequence_classification(
     const BertConfig& config, uint32_t num_labels, float classifier_dropout = 0.1F);
 
+// Task-specific head for token classification (NER, POS tagging, etc.)
+class BertForTokenClassification : public Bert {
+private:
+    std::shared_ptr<modules::DropoutLayer> m_classifier_dropout;
+    std::shared_ptr<modules::LinearLayer> m_classifier;
+    uint32_t m_num_labels;
+
+public:
+    BertForTokenClassification(const BertConfig& config, uint32_t num_labels, float classifier_dropout = 0.1F);
+
+    // Forward pass returning token-level classification logits (3-parameter version)
+    [[nodiscard]] autograd::TensorPtr operator()(
+        const autograd::TensorPtr& input_ids,
+        const autograd::TensorPtr& attention_mask = nullptr,
+        const autograd::TensorPtr& token_type_ids = nullptr);
+
+    // BaseTransformer interface - required override (2-parameter version)
+    [[nodiscard]] autograd::TensorPtr operator()(
+        const autograd::TensorPtr& x, const autograd::TensorPtr& mask) override;
+
+    // Forward pass with loss computation for training
+    [[nodiscard]] std::tuple<autograd::TensorPtr, autograd::TensorPtr> forward_with_loss(
+        const autograd::TensorPtr& input_ids,
+        const autograd::TensorPtr& attention_mask,
+        const autograd::TensorPtr& token_type_ids,
+        const autograd::TensorPtr& labels);
+
+    void load_from_safetensors(const std::filesystem::path& model_path) override;
+
+    [[nodiscard]] uint32_t get_num_labels() const {
+        return m_num_labels;
+    }
+};
+
+[[nodiscard]] std::shared_ptr<BertForTokenClassification> create_for_token_classification(
+    const BertConfig& config, uint32_t num_labels, float classifier_dropout = 0.1F);
+
+// Task-specific head for question answering (SQuAD, etc.)
+class BertForQuestionAnswering : public Bert {
+private:
+    std::shared_ptr<modules::LinearLayer> m_qa_outputs;
+
+public:
+    explicit BertForQuestionAnswering(const BertConfig& config);
+
+    // Forward pass returning start and end logits (3-parameter version)
+    // Returns concatenated [start_logits, end_logits] with shape [batch, 1, 1, seq_len * 2]
+    [[nodiscard]] autograd::TensorPtr operator()(
+        const autograd::TensorPtr& input_ids,
+        const autograd::TensorPtr& attention_mask = nullptr,
+        const autograd::TensorPtr& token_type_ids = nullptr);
+
+    // BaseTransformer interface - required override (2-parameter version)
+    [[nodiscard]] autograd::TensorPtr operator()(
+        const autograd::TensorPtr& x, const autograd::TensorPtr& mask) override;
+
+    // Forward pass with loss computation for training
+    [[nodiscard]] std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> forward_with_loss(
+        const autograd::TensorPtr& input_ids,
+        const autograd::TensorPtr& attention_mask,
+        const autograd::TensorPtr& token_type_ids,
+        const autograd::TensorPtr& start_positions,
+        const autograd::TensorPtr& end_positions);
+
+    void load_from_safetensors(const std::filesystem::path& model_path) override;
+};
+
+[[nodiscard]] std::shared_ptr<BertForQuestionAnswering> create_for_question_answering(const BertConfig& config);
+
+// Task-specific head for masked language modeling (pre-training)
+class BertForMaskedLM : public Bert {
+private:
+    std::shared_ptr<modules::LinearLayer> m_transform_dense;
+    std::shared_ptr<modules::LayerNormLayer> m_transform_norm;
+    std::shared_ptr<modules::LinearLayer> m_lm_head;
+
+public:
+    explicit BertForMaskedLM(const BertConfig& config);
+
+    // Forward pass returning vocabulary predictions (3-parameter version)
+    [[nodiscard]] autograd::TensorPtr operator()(
+        const autograd::TensorPtr& input_ids,
+        const autograd::TensorPtr& attention_mask = nullptr,
+        const autograd::TensorPtr& token_type_ids = nullptr);
+
+    // BaseTransformer interface - required override (2-parameter version)
+    [[nodiscard]] autograd::TensorPtr operator()(
+        const autograd::TensorPtr& x, const autograd::TensorPtr& mask) override;
+
+    // Forward pass with loss computation for training
+    [[nodiscard]] std::tuple<autograd::TensorPtr, autograd::TensorPtr> forward_with_loss(
+        const autograd::TensorPtr& input_ids,
+        const autograd::TensorPtr& attention_mask,
+        const autograd::TensorPtr& token_type_ids,
+        const autograd::TensorPtr& labels);
+
+    void load_from_safetensors(const std::filesystem::path& model_path) override;
+};
+
+[[nodiscard]] std::shared_ptr<BertForMaskedLM> create_for_masked_lm(const BertConfig& config);
+
 }  // namespace ttml::models::bert

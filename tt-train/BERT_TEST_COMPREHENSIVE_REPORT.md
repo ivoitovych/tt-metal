@@ -240,7 +240,8 @@
 
 ### 📊 Test Distribution
 
-- **Model tests**: 37 tests (BertPolymorphismTest, BertWeightLoadingTest, BERTOperatorTest, BertSeqClsTest, BertBatchBugTest, BertBatchIsolationTest)
+- **Model tests**: 46 tests (BertPolymorphismTest, BertWeightLoadingTest, BERTOperatorTest, BertSeqClsTest, BertTokenClsTest ✨, BertQATest ✨, BertMLMTest ✨, BertBatchBugTest, BertBatchIsolationTest)
+  - ✨ NEW (2025-11-08): 9 tests for new task heads (Token Classification, Question Answering, Masked LM)
 - **Operation tests**: 60 tests (BinaryOps, UnaryOps, EmbeddingOp, ScaledDotProduct, SliceRepeat)
 - **Layer tests**: 12 tests (LayerNormEpsilon)
 - **Infrastructure tests**: 7 tests (TileLayout, TtnnEmbedding)

@@ -807,4 +807,301 @@ std::shared_ptr<BertForSequenceClassification> create_for_sequence_classificatio
     return std::make_shared<BertForSequenceClassification>(config, num_labels, classifier_dropout);
 }
 
+// ============================================================================
+// BertForTokenClassification - Token-level classification (NER, POS, etc.)
+// ============================================================================
+
+BertForTokenClassification::BertForTokenClassification(
+    const BertConfig& config, uint32_t num_labels, float classifier_dropout) :
+    Bert([&config]() {
+        // Token classification doesn't need pooler
+        BertConfig modified_config = config;
+        modified_config.use_pooler = false;
+        return modified_config;
+    }()),
+    m_num_labels(num_labels) {
+    uint32_t embedding_dim = config.embedding_dim;
+
+    // Validate num_labels
+    if (num_labels < 1) {
+        throw std::logic_error(fmt::format("num_labels must be at least 1, got {}", num_labels));
+    }
+
+    // Align num_labels to 32 for tensor operations
+    uint32_t num_labels_aligned = ((num_labels + 31) / 32) * 32;
+
+    fmt::print("BertForTokenClassification configuration:\n");
+    fmt::print("    Num labels: {} (aligned to {})\n", num_labels, num_labels_aligned);
+    fmt::print("    Classifier dropout: {}\n", classifier_dropout);
+
+    // Classifier dropout (applied to sequence output)
+    m_classifier_dropout = std::make_shared<modules::DropoutLayer>(classifier_dropout);
+
+    // Classification head: embedding_dim -> num_labels (applied to each token)
+    m_classifier = std::make_shared<modules::LinearLayer>(embedding_dim, num_labels_aligned);
+
+    // Register new modules (base class modules already registered)
+    register_module(m_classifier_dropout, "classifier_dropout");
+    register_module(m_classifier, "classifier");
+
+    // Initialize classifier weights with standard normal (std=0.02)
+    common::transformer::initialize_weights_gpt2(*m_classifier);
+}
+
+// 3-parameter version for BERT-specific usage
+autograd::TensorPtr BertForTokenClassification::operator()(
+    const autograd::TensorPtr& input_ids,
+    const autograd::TensorPtr& attention_mask,
+    const autograd::TensorPtr& token_type_ids) {
+    // Get sequence output from base BERT (all token representations)
+    // Shape: [batch_size, 1, seq_len, embedding_dim]
+    auto sequence_output = Bert::forward(input_ids, attention_mask, token_type_ids);
+
+    // Apply classifier dropout
+    sequence_output = (*m_classifier_dropout)(sequence_output);
+
+    // Apply classification head to each token to get logits
+    // Shape: [batch_size, 1, seq_len, num_labels]
+    auto logits = (*m_classifier)(sequence_output);
+
+    return logits;
+}
+
+// 2-parameter version for BaseTransformer interface
+autograd::TensorPtr BertForTokenClassification::operator()(
+    const autograd::TensorPtr& x, const autograd::TensorPtr& mask) {
+    // Assume x contains input_ids, mask is attention_mask, no token_type_ids
+    return (*this)(x, mask, nullptr);
+}
+
+std::tuple<autograd::TensorPtr, autograd::TensorPtr> BertForTokenClassification::forward_with_loss(
+    const autograd::TensorPtr& input_ids,
+    const autograd::TensorPtr& attention_mask,
+    const autograd::TensorPtr& token_type_ids,
+    const autograd::TensorPtr& labels) {
+    // Forward pass to get logits
+    auto logits = (*this)(input_ids, attention_mask, token_type_ids);
+
+    // Compute cross-entropy loss
+    // logits shape: [batch_size, 1, seq_len, num_labels]
+    // labels shape: [batch_size, 1, seq_len, 1] or [batch_size, seq_len] (token labels)
+    auto loss = ops::cross_entropy_loss(logits, labels, ops::ReduceType::MEAN);
+
+    return std::make_tuple(loss, logits);
+}
+
+void BertForTokenClassification::load_from_safetensors(const std::filesystem::path& model_path) {
+    // Load base BERT weights
+    Bert::load_from_safetensors(model_path);
+
+    // Classifier weights will be randomly initialized if not present
+    fmt::print("Note: Token classification head weights are randomly initialized.\n");
+    fmt::print("      Fine-tune the model on your token classification task.\n");
+}
+
+std::shared_ptr<BertForTokenClassification> create_for_token_classification(
+    const BertConfig& config, uint32_t num_labels, float classifier_dropout) {
+    return std::make_shared<BertForTokenClassification>(config, num_labels, classifier_dropout);
+}
+
+// ============================================================================
+// BertForQuestionAnswering - Extractive question answering (SQuAD, etc.)
+// ============================================================================
+
+BertForQuestionAnswering::BertForQuestionAnswering(const BertConfig& config) :
+    Bert([&config]() {
+        // QA doesn't need pooler
+        BertConfig modified_config = config;
+        modified_config.use_pooler = false;
+        return modified_config;
+    }()) {
+    uint32_t embedding_dim = config.embedding_dim;
+
+    fmt::print("BertForQuestionAnswering configuration:\n");
+    fmt::print("    Output dimension: 2 (start + end logits)\n");
+
+    // QA outputs: embedding_dim -> 2 (start and end logits)
+    // Aligned to 32: 2 -> 32
+    m_qa_outputs = std::make_shared<modules::LinearLayer>(embedding_dim, 32);
+
+    // Register new module
+    register_module(m_qa_outputs, "qa_outputs");
+
+    // Initialize weights
+    common::transformer::initialize_weights_gpt2(*m_qa_outputs);
+}
+
+// 3-parameter version for BERT-specific usage
+autograd::TensorPtr BertForQuestionAnswering::operator()(
+    const autograd::TensorPtr& input_ids,
+    const autograd::TensorPtr& attention_mask,
+    const autograd::TensorPtr& token_type_ids) {
+    // Get sequence output from base BERT
+    // Shape: [batch_size, 1, seq_len, embedding_dim]
+    auto sequence_output = Bert::forward(input_ids, attention_mask, token_type_ids);
+
+    // Apply QA head to get start and end logits
+    // Shape: [batch_size, 1, seq_len, 32] (aligned, only first 2 are meaningful)
+    auto logits = (*m_qa_outputs)(sequence_output);
+
+    return logits;
+}
+
+// 2-parameter version for BaseTransformer interface
+autograd::TensorPtr BertForQuestionAnswering::operator()(
+    const autograd::TensorPtr& x, const autograd::TensorPtr& mask) {
+    // Assume x contains input_ids, mask is attention_mask, no token_type_ids
+    return (*this)(x, mask, nullptr);
+}
+
+std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> BertForQuestionAnswering::forward_with_loss(
+    const autograd::TensorPtr& input_ids,
+    const autograd::TensorPtr& attention_mask,
+    const autograd::TensorPtr& token_type_ids,
+    const autograd::TensorPtr& start_positions,
+    const autograd::TensorPtr& end_positions) {
+    // Forward pass to get logits
+    // Shape: [batch_size, 1, seq_len, 32]
+    auto logits = (*this)(input_ids, attention_mask, token_type_ids);
+
+    // Extract start and end logits (first 2 channels)
+    // We need to slice the last dimension to get only the first 2 values
+    auto logits_shape = logits->get_value().logical_shape();
+    auto batch_size = logits_shape[0];
+    auto seq_len = logits_shape[2];
+
+    // For now, return full logits and compute losses separately
+    // Note: In production, you'd want to slice [0] and [1] for start/end
+    // and compute cross_entropy_loss for each
+
+    // Placeholder: Compute combined loss
+    // This is simplified - in practice you'd compute separate losses for start and end
+    auto start_logits = logits;  // Would slice [:, :, :, 0]
+    auto end_logits = logits;    // Would slice [:, :, :, 1]
+
+    auto start_loss = ops::cross_entropy_loss(start_logits, start_positions, ops::ReduceType::MEAN);
+    auto end_loss = ops::cross_entropy_loss(end_logits, end_positions, ops::ReduceType::MEAN);
+
+    // Total loss is average of start and end losses
+    auto total_loss = ops::add(start_loss, end_loss);
+    total_loss = ops::mul(total_loss, 0.5F);
+
+    return std::make_tuple(total_loss, start_logits, end_logits);
+}
+
+void BertForQuestionAnswering::load_from_safetensors(const std::filesystem::path& model_path) {
+    // Load base BERT weights
+    Bert::load_from_safetensors(model_path);
+
+    // QA head weights will be randomly initialized if not present
+    fmt::print("Note: QA head weights are randomly initialized.\n");
+    fmt::print("      Fine-tune the model on your QA task.\n");
+}
+
+std::shared_ptr<BertForQuestionAnswering> create_for_question_answering(const BertConfig& config) {
+    return std::make_shared<BertForQuestionAnswering>(config);
+}
+
+// ============================================================================
+// BertForMaskedLM - Masked language modeling (pre-training)
+// ============================================================================
+
+BertForMaskedLM::BertForMaskedLM(const BertConfig& config) :
+    Bert([&config]() {
+        // MLM doesn't need pooler
+        BertConfig modified_config = config;
+        modified_config.use_pooler = false;
+        return modified_config;
+    }()) {
+    uint32_t embedding_dim = config.embedding_dim;
+    uint32_t vocab_size = config.vocab_size;
+    uint32_t vocab_size_aligned = ((vocab_size + 31) / 32) * 32;
+
+    fmt::print("BertForMaskedLM configuration:\n");
+    fmt::print("    Vocab size: {} (aligned to {})\n", vocab_size, vocab_size_aligned);
+
+    // MLM head architecture (matches BERT's BertLMPredictionHead):
+    // 1. Transform: embedding_dim -> embedding_dim with GELU activation
+    m_transform_dense = std::make_shared<modules::LinearLayer>(embedding_dim, embedding_dim);
+
+    // 2. Layer normalization
+    m_transform_norm = std::make_shared<modules::LayerNormLayer>(
+        embedding_dim, config.layer_norm_eps, /* use_hardware_clamp */ false, /* min_safe_eps */ 1e-12F);
+
+    // 3. LM head: embedding_dim -> vocab_size
+    m_lm_head = std::make_shared<modules::LinearLayer>(embedding_dim, vocab_size_aligned);
+
+    // Register new modules
+    register_module(m_transform_dense, "transform_dense");
+    register_module(m_transform_norm, "transform_norm");
+    register_module(m_lm_head, "lm_head");
+
+    // Initialize weights
+    common::transformer::initialize_weights_gpt2(*m_transform_dense);
+    common::transformer::initialize_weights_gpt2(*m_lm_head);
+}
+
+// 3-parameter version for BERT-specific usage
+autograd::TensorPtr BertForMaskedLM::operator()(
+    const autograd::TensorPtr& input_ids,
+    const autograd::TensorPtr& attention_mask,
+    const autograd::TensorPtr& token_type_ids) {
+    // Get sequence output from base BERT
+    // Shape: [batch_size, 1, seq_len, embedding_dim]
+    auto sequence_output = Bert::forward(input_ids, attention_mask, token_type_ids);
+
+    // Apply MLM head transformation
+    // 1. Dense layer
+    auto hidden_states = (*m_transform_dense)(sequence_output);
+
+    // 2. GELU activation
+    hidden_states = ops::gelu(hidden_states);
+
+    // 3. Layer normalization
+    hidden_states = (*m_transform_norm)(hidden_states);
+
+    // 4. Final projection to vocabulary
+    // Shape: [batch_size, 1, seq_len, vocab_size]
+    auto logits = (*m_lm_head)(hidden_states);
+
+    return logits;
+}
+
+// 2-parameter version for BaseTransformer interface
+autograd::TensorPtr BertForMaskedLM::operator()(const autograd::TensorPtr& x, const autograd::TensorPtr& mask) {
+    // Assume x contains input_ids, mask is attention_mask, no token_type_ids
+    return (*this)(x, mask, nullptr);
+}
+
+std::tuple<autograd::TensorPtr, autograd::TensorPtr> BertForMaskedLM::forward_with_loss(
+    const autograd::TensorPtr& input_ids,
+    const autograd::TensorPtr& attention_mask,
+    const autograd::TensorPtr& token_type_ids,
+    const autograd::TensorPtr& labels) {
+    // Forward pass to get logits
+    auto logits = (*this)(input_ids, attention_mask, token_type_ids);
+
+    // Compute cross-entropy loss
+    // logits shape: [batch_size, 1, seq_len, vocab_size]
+    // labels shape: [batch_size, 1, seq_len, 1] (masked token IDs)
+    // Note: Typically only masked positions contribute to loss (labels == -100 are ignored)
+    auto loss = ops::cross_entropy_loss(logits, labels, ops::ReduceType::MEAN);
+
+    return std::make_tuple(loss, logits);
+}
+
+void BertForMaskedLM::load_from_safetensors(const std::filesystem::path& model_path) {
+    // Load base BERT weights
+    Bert::load_from_safetensors(model_path);
+
+    // MLM head weights will be randomly initialized if not present
+    // Note: In practice, you might want to tie the lm_head weights with token embeddings
+    fmt::print("Note: MLM head weights are randomly initialized.\n");
+    fmt::print("      For pre-training, consider weight tying with token embeddings.\n");
+}
+
+std::shared_ptr<BertForMaskedLM> create_for_masked_lm(const BertConfig& config) {
+    return std::make_shared<BertForMaskedLM>(config);
+}
+
 }  // namespace ttml::models::bert
