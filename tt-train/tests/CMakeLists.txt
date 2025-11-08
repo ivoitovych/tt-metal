@@ -28,6 +28,7 @@ set(SOURCES
     model/bert_token_cls_test.cpp
     model/bert_qa_test.cpp
     model/bert_mlm_test.cpp
+    model/bert_task_heads_comprehensive_test.cpp
     ttnn_fixed/concat_op_test.cpp
     ttnn_fixed/distributed/distributed_ttnn_ops_test.cpp
     ttnn_fixed/trivial_ttnn_ops_test.cpp
