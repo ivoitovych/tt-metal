@@ -126,24 +126,24 @@ TEST_F(BertSeqClsTest, BasicForwardPass) {
     const size_t seq_len = 32;
 
     // Input IDs: random vocab indices
-    std::vector<float> input_ids(batch_size * seq_len);
+    std::vector<uint32_t> input_ids(batch_size * seq_len);
     std::mt19937 gen(42);
     std::uniform_int_distribution<uint32_t> vocab_dist(0, config.vocab_size - 1);
     for (auto& id : input_ids) {
-        id = static_cast<float>(vocab_dist(gen));
+        id = vocab_dist(gen);
     }
 
     // Token type IDs: all zeros (single sequence)
-    std::vector<float> token_type_ids(batch_size * seq_len, 0.0F);
+    std::vector<uint32_t> token_type_ids(batch_size * seq_len, 0);
 
     // Attention mask: all ones (no padding)
     std::vector<float> attention_mask(batch_size * seq_len, 1.0F);
 
     // Convert to tensors
-    auto input_ids_tensor =
-        core::from_vector(input_ids, ttnn::Shape{batch_size, 1, 1, seq_len}, &autograd::ctx().get_device());
-    auto token_type_ids_tensor =
-        core::from_vector(token_type_ids, ttnn::Shape{batch_size, 1, 1, seq_len}, &autograd::ctx().get_device());
+    auto input_ids_tensor = core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        input_ids, ttnn::Shape{batch_size, 1, 1, seq_len}, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
+    auto token_type_ids_tensor = core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        token_type_ids, ttnn::Shape{batch_size, 1, 1, seq_len}, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
     auto attention_mask_tensor =
         core::from_vector(attention_mask, ttnn::Shape{batch_size, 1, 1, seq_len}, &autograd::ctx().get_device());
 
@@ -199,14 +199,17 @@ TEST_F(BertSeqClsTest, MultipleLabelsTest) {
         const size_t batch_size = 1;
         const size_t seq_len = 32;  // Must be multiple of TILE_HEIGHT (32)
 
-        std::vector<float> input_ids(batch_size * seq_len, 0.0F);
-        std::vector<float> token_type_ids(batch_size * seq_len, 0.0F);
+        std::vector<uint32_t> input_ids(batch_size * seq_len, 0);
+        std::vector<uint32_t> token_type_ids(batch_size * seq_len, 0);
         std::vector<float> attention_mask(batch_size * seq_len, 1.0F);
 
-        auto input_ids_tensor =
-            core::from_vector(input_ids, ttnn::Shape{batch_size, 1, 1, seq_len}, &autograd::ctx().get_device());
-        auto token_type_ids_tensor =
-            core::from_vector(token_type_ids, ttnn::Shape{batch_size, 1, 1, seq_len}, &autograd::ctx().get_device());
+        auto input_ids_tensor = core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+            input_ids, ttnn::Shape{batch_size, 1, 1, seq_len}, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
+        auto token_type_ids_tensor = core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+            token_type_ids,
+            ttnn::Shape{batch_size, 1, 1, seq_len},
+            &autograd::ctx().get_device(),
+            ttnn::Layout::ROW_MAJOR);
         auto attention_mask_tensor =
             core::from_vector(attention_mask, ttnn::Shape{batch_size, 1, 1, seq_len}, &autograd::ctx().get_device());
 
@@ -294,14 +297,14 @@ TEST_F(BertSeqClsTest, OutputConsistency) {
     const size_t seq_len = 32;
 
     // Create deterministic inputs
-    std::vector<float> input_ids(batch_size * seq_len, 5.0F);  // All token ID 5
-    std::vector<float> token_type_ids(batch_size * seq_len, 0.0F);
+    std::vector<uint32_t> input_ids(batch_size * seq_len, 5);  // All token ID 5
+    std::vector<uint32_t> token_type_ids(batch_size * seq_len, 0);
     std::vector<float> attention_mask(batch_size * seq_len, 1.0F);
 
-    auto input_ids_tensor =
-        core::from_vector(input_ids, ttnn::Shape{batch_size, 1, 1, seq_len}, &autograd::ctx().get_device());
-    auto token_type_ids_tensor =
-        core::from_vector(token_type_ids, ttnn::Shape{batch_size, 1, 1, seq_len}, &autograd::ctx().get_device());
+    auto input_ids_tensor = core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        input_ids, ttnn::Shape{batch_size, 1, 1, seq_len}, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
+    auto token_type_ids_tensor = core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        token_type_ids, ttnn::Shape{batch_size, 1, 1, seq_len}, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
     auto attention_mask_tensor =
         core::from_vector(attention_mask, ttnn::Shape{batch_size, 1, 1, seq_len}, &autograd::ctx().get_device());
 
@@ -367,14 +370,14 @@ TEST_F(BertSeqClsTest, BatchSizeIndependence) {
     const size_t seq_len = 32;  // Must be multiple of TILE_HEIGHT (32)
 
     // Run with batch size 1
-    std::vector<float> input_ids_single(seq_len, 7.0F);
-    std::vector<float> token_type_ids_single(seq_len, 0.0F);
+    std::vector<uint32_t> input_ids_single(seq_len, 7);
+    std::vector<uint32_t> token_type_ids_single(seq_len, 0);
     std::vector<float> attention_mask_single(seq_len, 1.0F);
 
-    auto input_ids_tensor_single =
-        core::from_vector(input_ids_single, ttnn::Shape{1, 1, 1, seq_len}, &autograd::ctx().get_device());
-    auto token_type_ids_tensor_single =
-        core::from_vector(token_type_ids_single, ttnn::Shape{1, 1, 1, seq_len}, &autograd::ctx().get_device());
+    auto input_ids_tensor_single = core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        input_ids_single, ttnn::Shape{1, 1, 1, seq_len}, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
+    auto token_type_ids_tensor_single = core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        token_type_ids_single, ttnn::Shape{1, 1, 1, seq_len}, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
     auto attention_mask_tensor_single =
         core::from_vector(attention_mask_single, ttnn::Shape{1, 1, 1, seq_len}, &autograd::ctx().get_device());
 
@@ -386,27 +389,27 @@ TEST_F(BertSeqClsTest, BatchSizeIndependence) {
     auto logits_single_data = core::to_vector(logits_single->get_value());
 
     // Run same input as part of batch size 2
-    std::vector<float> input_ids_batch(2 * seq_len);
-    std::vector<float> token_type_ids_batch(2 * seq_len);
+    std::vector<uint32_t> input_ids_batch(2 * seq_len);
+    std::vector<uint32_t> token_type_ids_batch(2 * seq_len);
     std::vector<float> attention_mask_batch(2 * seq_len);
 
     // First sample: same as single
     for (size_t i = 0; i < seq_len; ++i) {
-        input_ids_batch[i] = 7.0F;
-        token_type_ids_batch[i] = 0.0F;
+        input_ids_batch[i] = 7;
+        token_type_ids_batch[i] = 0;
         attention_mask_batch[i] = 1.0F;
     }
     // Second sample: different
     for (size_t i = seq_len; i < 2 * seq_len; ++i) {
-        input_ids_batch[i] = 3.0F;
-        token_type_ids_batch[i] = 0.0F;
+        input_ids_batch[i] = 3;
+        token_type_ids_batch[i] = 0;
         attention_mask_batch[i] = 1.0F;
     }
 
-    auto input_ids_tensor_batch =
-        core::from_vector(input_ids_batch, ttnn::Shape{2, 1, 1, seq_len}, &autograd::ctx().get_device());
-    auto token_type_ids_tensor_batch =
-        core::from_vector(token_type_ids_batch, ttnn::Shape{2, 1, 1, seq_len}, &autograd::ctx().get_device());
+    auto input_ids_tensor_batch = core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        input_ids_batch, ttnn::Shape{2, 1, 1, seq_len}, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
+    auto token_type_ids_tensor_batch = core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        token_type_ids_batch, ttnn::Shape{2, 1, 1, seq_len}, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
     auto attention_mask_tensor_batch =
         core::from_vector(attention_mask_batch, ttnn::Shape{2, 1, 1, seq_len}, &autograd::ctx().get_device());
 
