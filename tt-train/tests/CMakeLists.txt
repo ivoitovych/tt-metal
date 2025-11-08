@@ -24,6 +24,7 @@ set(SOURCES
     model/bert_batch_isolation_test.cpp
     model/bert_seed_sensitivity_test.cpp
     model/bert_attention_mask_test.cpp
+    model/bert_multi_label_test.cpp
     ttnn_fixed/concat_op_test.cpp
     ttnn_fixed/distributed/distributed_ttnn_ops_test.cpp
     ttnn_fixed/trivial_ttnn_ops_test.cpp
