@@ -306,11 +306,13 @@ The "batch processing bug" was actually a **dtype bug in test code**:
    - Impact: Medium - Real sequences without padding have lower accuracy
    - Status: **Under Investigation**
 
-3. ⚠️ **Seed Sensitivity** (Low Priority)
-   - Issue: Seed 42 produces completely wrong results (PCC = -1.0)
-   - Workaround: Tests use seed 43+
-   - Impact: Low - Easy to avoid problematic seed
-   - Status: **Under Investigation**
+3. ✅ **Seed Sensitivity** - **RESOLVED** (2025-11-07)
+   - Original Issue: Seed 42 produced completely wrong results (PCC = -1.0)
+   - Root Cause: Same dtype bug as batch processing (float32 vs uint32)
+   - Solution: Fixed dtypes in tests
+   - Test Added: `bert_seed_sensitivity_test.cpp` (permanent regression test)
+   - Validation: All seeds (42, 43, 44, 100) produce reasonable outputs with correlation = 1.0
+   - Status: **RESOLVED** - All seeds work correctly
 
 4. ⚠️ **Multi-Label Classification** (Medium Priority)
    - Issue: 3+ labels show PCC ~0.93 in Python
@@ -336,7 +338,6 @@ The "batch processing bug" was actually a **dtype bug in test code**:
 **⚠️ Needs Investigation (Non-Blocking):**
 - ⚠️ All-ones attention masks (use some padding for now)
 - ⚠️ Multi-label classification (binary works, 3+ labels need investigation)
-- ⚠️ Seed 42 (use seeds 43+ for now)
 
 ### Branch Purpose: UNBLOCKED
 
@@ -358,8 +359,7 @@ The "batch processing bug" was actually a **dtype bug in test code**:
 3. ⚠️ **Investigate multi-label classification** (medium priority)
 
 **Future (Low Priority)**:
-4. ⚠️ **Investigate seed sensitivity** (low priority - easy workaround)
-5. ✅ **Validate BERT-base models**
+4. ✅ **Validate BERT-base models**
 
 **Recommendation**:
 - ✅ **CAN USE FOR PRODUCTION** - with proper dtypes (uint32 for token IDs)

@@ -22,6 +22,7 @@ set(SOURCES
     model/bert_seq_cls_test.cpp
     model/bert_batch_bug_test.cpp
     model/bert_batch_isolation_test.cpp
+    model/bert_seed_sensitivity_test.cpp
     ttnn_fixed/concat_op_test.cpp
     ttnn_fixed/distributed/distributed_ttnn_ops_test.cpp
     ttnn_fixed/trivial_ttnn_ops_test.cpp
