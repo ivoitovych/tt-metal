@@ -9,6 +9,53 @@
 #include "models/bert.hpp"
 #include "modules/bert_heads.hpp"
 
+/**
+ * @file bert_tasks.hpp
+ * @brief Complete BERT task models for fine-tuning and inference
+ *
+ * This file provides 5 complete BERT task models that combine the base BERT
+ * encoder with task-specific heads:
+ *
+ * 1. BertForSequenceClassification - Sentence classification (sentiment, etc.)
+ * 2. BertForTokenClassification - Token tagging (NER, POS tagging)
+ * 3. BertForQuestionAnswering - Span extraction (SQuAD, extractive QA)
+ * 4. BertForMaskedLM - Masked language modeling (BERT pre-training task)
+ * 5. BertForPreTraining - Combined MLM + NSP (full BERT pre-training)
+ *
+ * Design Principles:
+ * - Composition pattern: shared_ptr<Bert> + task head (not inheritance)
+ * - All inherit BaseTransformer only (no task base class)
+ * - Per-task configs use composition (not inheritance)
+ * - External loss computation (trainers own loss semantics)
+ * - HuggingFace-compatible weight loading
+ *
+ * Usage Example:
+ * @code
+ *   // Create model from config
+ *   auto config = bert::SequenceClassificationConfig();
+ *   config.bert_config.embedding_dim = 768;
+ *   config.num_labels = 2;
+ *   auto model = bert::create_for_sequence_classification(config);
+ *
+ *   // Load pretrained weights
+ *   model->load_from_safetensors("bert-base-uncased");
+ *
+ *   // Forward pass
+ *   auto logits = (*model)(input_ids, attention_mask, token_type_ids);
+ *
+ *   // External loss computation (TTML pattern)
+ *   auto loss = ops::bert_losses::compute_sequence_classification_loss(logits, labels);
+ *   loss->backward();
+ * @endcode
+ *
+ * @see modules::BertSequenceClassificationHead
+ * @see modules::BertTokenClassificationHead
+ * @see modules::BertQuestionAnsweringHead
+ * @see modules::BertMaskedLMHead
+ * @see modules::BertNSPHead
+ * @see ops::bert_losses
+ */
+
 namespace ttml::models::bert {
 
 // ============================================================================
@@ -38,11 +85,20 @@ struct MaskedLMConfig {
     bool tie_word_embeddings = true;
 };
 
+/**
+ * @brief Configuration for BERT pre-training (MLM + NSP)
+ *
+ * Combines Masked Language Modeling (MLM) and Next Sentence Prediction (NSP)
+ * for full BERT-style pre-training on unlabeled text.
+ *
+ * @note This requires the BertOutput helper for proper dual-output support.
+ *       See BertForPreTraining::forward_pretraining() for details.
+ */
 struct PreTrainingConfig {
     BertConfig bert_config;
-    bool tie_word_embeddings = true;
-    float mlm_loss_weight = 1.0F;  // For combined loss
-    float nsp_loss_weight = 1.0F;
+    bool tie_word_embeddings = true;  ///< Tie MLM decoder with input embeddings
+    float mlm_loss_weight = 1.0F;     ///< Weight for MLM loss in combined loss
+    float nsp_loss_weight = 1.0F;     ///< Weight for NSP loss in combined loss
 };
 
 // ============================================================================
@@ -173,6 +229,41 @@ public:
 // CRITICAL FIX: Uses BertOutput helper to properly support both heads
 // ============================================================================
 
+/**
+ * @brief BERT model for pre-training with Masked LM and Next Sentence Prediction
+ *
+ * This model combines two pre-training objectives:
+ * 1. Masked Language Modeling (MLM) - predicts masked tokens
+ * 2. Next Sentence Prediction (NSP) - predicts if sentence B follows sentence A
+ *
+ * CRITICAL BUG FIX:
+ * This implementation uses the BertOutput helper struct to properly get both
+ * sequence output (for MLM) and pooled output (for NSP) in a single forward pass.
+ * Previous implementations had placeholder code or semantic errors when trying
+ * to support dual outputs.
+ *
+ * Usage:
+ * @code
+ *   auto config = bert::PreTrainingConfig();
+ *   config.bert_config.embedding_dim = 768;
+ *   config.tie_word_embeddings = true;  // Standard BERT practice
+ *   auto model = bert::create_for_pretraining(config);
+ *
+ *   // Forward pass returns both outputs
+ *   auto output = model->forward_pretraining(input_ids, attention_mask, token_type_ids);
+ *   auto mlm_logits = output.mlm_logits;  // [B, 1, S, vocab_size]
+ *   auto nsp_logits = output.nsp_logits;  // [B, 1, 1, 2]
+ *
+ *   // Compute combined loss
+ *   auto loss = ops::bert_losses::compute_pretraining_loss(
+ *       mlm_logits, nsp_logits, mlm_labels, nsp_labels,
+ *       config.mlm_loss_weight, config.nsp_loss_weight);
+ * @endcode
+ *
+ * @see BertOutput
+ * @see Bert::forward_structured()
+ * @see ops::bert_losses::compute_pretraining_loss()
+ */
 class BertForPreTraining : public BaseTransformer {
 private:
     std::shared_ptr<Bert> m_bert;

@@ -121,7 +121,7 @@ void save_bert_checkpoint(
     float best_loss) {
     BertTrainingState state;
     state.global_step = global_step;
-    state.epoch = 0;  // TODO: Pass epoch if needed
+    state.epoch = 0;  // Epoch tracking optional - can use full save_bert_training_state() if needed
     state.best_loss = best_loss;
     state.current_loss = 0.0F;
     state.model_type = "BertTaskModel";  // Generic

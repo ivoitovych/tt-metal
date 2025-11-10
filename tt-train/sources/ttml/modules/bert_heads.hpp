@@ -11,13 +11,31 @@
 
 namespace ttml::modules {
 
-// ============================================================================
-// Pure Tensor Transformers
-// - NO abstract base class (simplest possible)
-// - NO loss methods (external only)
-// - HF-exact architectures (validated)
-// - GPT-2 style: simple ModuleBase subclasses
-// ============================================================================
+/**
+ * @file bert_heads.hpp
+ * @brief Task-specific head modules for BERT models
+ *
+ * This file provides 5 task-specific head modules that can be composed with
+ * the base BERT encoder to create complete task models:
+ *
+ * 1. BertSequenceClassificationHead - For sentence-level classification
+ * 2. BertTokenClassificationHead - For token-level tagging (NER, POS)
+ * 3. BertQuestionAnsweringHead - For span extraction (SQuAD)
+ * 4. BertMaskedLMHead - For masked language modeling
+ * 5. BertNSPHead - For next sentence prediction
+ *
+ * Design Principles:
+ * - NO abstract base class (simplest possible, GPT-2 pattern)
+ * - NO loss methods (external only - trainers own loss computation)
+ * - HF-exact architectures (validated against HuggingFace)
+ * - Pure tensor transformers (ModuleBase subclasses)
+ *
+ * @see models::bert::BertForSequenceClassification
+ * @see models::bert::BertForTokenClassification
+ * @see models::bert::BertForQuestionAnswering
+ * @see models::bert::BertForMaskedLM
+ * @see models::bert::BertForPreTraining
+ */
 
 // ============================================================================
 // 1. Sequence Classification Head
