@@ -43,8 +43,8 @@ void save_bert_training_state(
 
     // Save metadata
     file.put("version", "1.0");
-    file.put("model_type", state.model_type);
-    file.put("timestamp", state.timestamp);
+    file.put("model_type", std::string_view{state.model_type});
+    file.put("timestamp", std::string_view{state.timestamp});
     file.put("global_step", state.global_step);
     file.put("epoch", state.epoch);
     file.put("best_loss", state.best_loss);
@@ -149,7 +149,7 @@ void save_bert_model_only(const std::filesystem::path& path, const models::BaseT
     // Save metadata
     file.put("version", "1.0");
     file.put("model_only", true);
-    file.put("timestamp", get_timestamp());
+    file.put("timestamp", std::string_view{get_timestamp()});
 
     // Save model parameters
     write_module(file, "model", &model);

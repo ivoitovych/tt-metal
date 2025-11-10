@@ -42,11 +42,11 @@
 
 class GELUOpTest : public ::testing::Test {
 protected:
-    static void SetUpTestSuite() {
+    void SetUp() override {
         ttml::autograd::ctx().open_device();
     }
 
-    static void TearDownTestSuite() {
+    void TearDown() override {
         ttml::autograd::ctx().close_device();
     }
 };

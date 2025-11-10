@@ -29,7 +29,7 @@ BertSequenceClassificationHead::BertSequenceClassificationHead(
     create_name("sequence_classification_head");
 
     // Initialize with GPT-2 style (proven effective in TTML)
-    common::transformer::initialize_weights_gpt2(*this);
+    models::common::transformer::initialize_weights_gpt2(*this);
 }
 
 autograd::TensorPtr BertSequenceClassificationHead::operator()(const autograd::TensorPtr& pooled_output) {
@@ -55,7 +55,7 @@ BertTokenClassificationHead::BertTokenClassificationHead(
     register_module(m_dropout, "dropout");
     register_module(m_classifier, "classifier");
 
-    common::transformer::initialize_weights_gpt2(*this);
+    models::common::transformer::initialize_weights_gpt2(*this);
 }
 
 autograd::TensorPtr BertTokenClassificationHead::operator()(const autograd::TensorPtr& sequence_output) {
@@ -73,7 +73,7 @@ BertQuestionAnsweringHead::BertQuestionAnsweringHead(uint32_t hidden_size) {
     create_name("question_answering_head");
     register_module(m_qa_outputs, "qa_outputs");
 
-    common::transformer::initialize_weights_gpt2(*this);
+    models::common::transformer::initialize_weights_gpt2(*this);
 }
 
 autograd::TensorPtr BertQuestionAnsweringHead::operator()(const autograd::TensorPtr& sequence_output) {
@@ -87,15 +87,19 @@ BertQuestionAnsweringHead::QALogits BertQuestionAnsweringHead::split_logits(
     auto seq_len = shape[2];
 
     // Split last dimension: [:, :, :, 0] = start, [:, :, :, 1] = end
+    ttnn::SmallVector<uint32_t> stride = {1, 1, 1, 1};
+
     auto start_logits = ttnn::slice(
         combined_logits->get_value(),
         ttnn::SmallVector<uint32_t>{0, 0, 0, 0},
-        ttnn::SmallVector<uint32_t>{batch_size, 1, seq_len, 1});
+        ttnn::SmallVector<uint32_t>{batch_size, 1, seq_len, 1},
+        stride);
 
     auto end_logits = ttnn::slice(
         combined_logits->get_value(),
         ttnn::SmallVector<uint32_t>{0, 0, 0, 1},
-        ttnn::SmallVector<uint32_t>{batch_size, 1, seq_len, 2});
+        ttnn::SmallVector<uint32_t>{batch_size, 1, seq_len, 2},
+        stride);
 
     return QALogits{
         .start_logits = autograd::create_tensor(start_logits), .end_logits = autograd::create_tensor(end_logits)};
@@ -117,7 +121,7 @@ BertMaskedLMHead::BertMaskedLMHead(uint32_t hidden_size, uint32_t vocab_size, fl
     register_module(m_layer_norm, "transform.LayerNorm");
     register_module(m_decoder, "decoder");
 
-    common::transformer::initialize_weights_gpt2(*this);
+    models::common::transformer::initialize_weights_gpt2(*this);
 }
 
 autograd::TensorPtr BertMaskedLMHead::operator()(const autograd::TensorPtr& sequence_output) {
@@ -146,7 +150,7 @@ BertNSPHead::BertNSPHead(uint32_t hidden_size) {
     create_name("nsp_head");
     register_module(m_seq_relationship, "seq_relationship");
 
-    common::transformer::initialize_weights_gpt2(*this);
+    models::common::transformer::initialize_weights_gpt2(*this);
 }
 
 autograd::TensorPtr BertNSPHead::operator()(const autograd::TensorPtr& pooled_output) {

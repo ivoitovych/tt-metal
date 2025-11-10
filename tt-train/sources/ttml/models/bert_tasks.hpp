@@ -123,7 +123,7 @@ public:
     [[nodiscard]] autograd::TensorPtr operator()(
         const autograd::TensorPtr& input_ids,
         const autograd::TensorPtr& attention_mask = nullptr,
-        const autograd::TensorPtr& token_type_ids = nullptr) override;
+        const autograd::TensorPtr& token_type_ids = nullptr);
 
     void load_from_safetensors(const std::filesystem::path& model_path) override;
 
@@ -156,7 +156,7 @@ public:
     [[nodiscard]] autograd::TensorPtr operator()(
         const autograd::TensorPtr& input_ids,
         const autograd::TensorPtr& attention_mask = nullptr,
-        const autograd::TensorPtr& token_type_ids = nullptr) override;
+        const autograd::TensorPtr& token_type_ids = nullptr);
 
     void load_from_safetensors(const std::filesystem::path& model_path) override;
 
@@ -186,7 +186,7 @@ public:
     [[nodiscard]] autograd::TensorPtr operator()(
         const autograd::TensorPtr& input_ids,
         const autograd::TensorPtr& attention_mask = nullptr,
-        const autograd::TensorPtr& token_type_ids = nullptr) override;
+        const autograd::TensorPtr& token_type_ids = nullptr);
 
     void load_from_safetensors(const std::filesystem::path& model_path) override;
 
@@ -212,7 +212,7 @@ public:
     [[nodiscard]] autograd::TensorPtr operator()(
         const autograd::TensorPtr& input_ids,
         const autograd::TensorPtr& attention_mask = nullptr,
-        const autograd::TensorPtr& token_type_ids = nullptr) override;
+        const autograd::TensorPtr& token_type_ids = nullptr);
 
     void load_from_safetensors(const std::filesystem::path& model_path) override;
 
@@ -279,7 +279,7 @@ public:
     [[nodiscard]] autograd::TensorPtr operator()(
         const autograd::TensorPtr& input_ids,
         const autograd::TensorPtr& attention_mask = nullptr,
-        const autograd::TensorPtr& token_type_ids = nullptr) override;
+        const autograd::TensorPtr& token_type_ids = nullptr);
 
     // Pre-training specific: returns both MLM and NSP logits
     struct PreTrainingOutput {
