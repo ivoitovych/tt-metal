@@ -268,6 +268,61 @@ autograd::TensorPtr Bert::operator()(
     return forward(input_ids, attention_mask, token_type_ids);
 }
 
+// ========================================================================
+// NEW: Structured output for PreTraining (MLM + NSP support)
+// ========================================================================
+BertOutput Bert::forward_structured(
+    const autograd::TensorPtr& input_ids,
+    const autograd::TensorPtr& attention_mask,
+    const autograd::TensorPtr& token_type_ids) {
+    // Process attention mask for proper masking
+    auto processed_mask = process_attention_mask(attention_mask);
+
+    // Get input embeddings
+    auto hidden_states = get_embeddings(input_ids, token_type_ids);
+
+    // Pass through transformer blocks
+    for (auto& block : m_blocks) {
+        if (m_runner_type == common::transformer::RunnerType::MemoryEfficient) {
+            hidden_states = common::transformer::memory_efficient_runner(*block, hidden_states, processed_mask);
+        } else if (m_runner_type == common::transformer::RunnerType::Default) {
+            hidden_states = (*block)(hidden_states, processed_mask);
+        } else {
+            throw std::runtime_error("Unknown runner type. Supported runner types ['default', 'memory_efficient']");
+        }
+    }
+
+    BertOutput output;
+    output.last_hidden_state = hidden_states;
+
+    // If pooler exists, compute pooled output
+    if (m_pooler) {
+        // Extract [CLS] token representation (first token in sequence)
+        auto hidden_shape = hidden_states->get_shape();
+        auto batch_size = hidden_shape[0];
+        auto embedding_dim = hidden_shape[3];
+
+        // Slice to get only the [CLS] token: [batch, 1, 1, embedding_dim]
+        ttnn::SmallVector<uint32_t> start_indices = {0, 0, 0, 0};
+        ttnn::SmallVector<uint32_t> end_indices = {batch_size, 1, 1, embedding_dim};
+        ttnn::SmallVector<uint32_t> stride = {1, 1, 1, 1};
+
+        auto cls_token = ttnn::slice(hidden_states->get_value(), start_indices, end_indices, stride);
+
+        auto pooled_output = autograd::create_tensor(cls_token);
+        pooled_output = (*m_pooler)(pooled_output);
+
+        // BERT uses tanh activation for the pooler output
+        pooled_output = ops::tanh(pooled_output);
+
+        output.pooler_output = pooled_output;
+    } else {
+        output.pooler_output = nullptr;
+    }
+
+    return output;
+}
+
 // Forward pass with intermediate outputs for debugging/validation
 Bert::IntermediateOutputs Bert::forward_with_intermediates(
     const autograd::TensorPtr& input_ids,

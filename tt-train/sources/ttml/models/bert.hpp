@@ -34,6 +34,19 @@ struct BertConfig {
     bool use_pooler = false;  // For classification tasks
 };
 
+// ============================================================================
+// NEW: Optional Helper Struct (Non-Breaking Addition)
+// Purpose: Fix PreTraining bug - properly support MLM + NSP
+// ============================================================================
+struct BertOutput {
+    autograd::TensorPtr last_hidden_state;  // [B, 1, S, E]
+    autograd::TensorPtr pooler_output;      // [B, 1, 1, E] or nullptr
+
+    [[nodiscard]] bool has_pooler() const {
+        return pooler_output != nullptr;
+    }
+};
+
 class Bert : public BaseTransformer {
 private:
     std::shared_ptr<modules::Embedding> m_token_embeddings;
@@ -70,6 +83,15 @@ public:
         const autograd::TensorPtr& input_ids,
         const autograd::TensorPtr& attention_mask,
         const autograd::TensorPtr& token_type_ids);
+
+    // ========================================================================
+    // NEW: Optional structured output (Non-Breaking Addition)
+    // Purpose: Properly support PreTraining (MLM + NSP)
+    // ========================================================================
+    [[nodiscard]] BertOutput forward_structured(
+        const autograd::TensorPtr& input_ids,
+        const autograd::TensorPtr& attention_mask = nullptr,
+        const autograd::TensorPtr& token_type_ids = nullptr);
 
     // Public accessors for testing and introspection
     [[nodiscard]] const BertConfig& get_config() const {
