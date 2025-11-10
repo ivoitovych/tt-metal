@@ -1,0 +1,32 @@
+# BERT Question Answering Configuration
+# For extractive QA tasks like SQuAD
+
+# Base BERT configuration
+bert_config:
+  vocab_size: 30522
+  max_sequence_length: 384  # Longer for QA context
+  embedding_dim: 768
+  intermediate_size: 3072
+  num_heads: 12
+  num_blocks: 12
+  dropout_prob: 0.1
+  layer_norm_eps: 1.0e-12
+  use_token_type_embeddings: true
+  type_vocab_size: 2
+  runner_type: default  # or memory_efficient
+
+# Task-specific configuration
+# Question Answering has no additional parameters beyond base BERT
+
+# Optional: Training configuration
+training:
+  learning_rate: 3.0e-5
+  weight_decay: 0.01
+  batch_size: 12
+  num_epochs: 2
+  warmup_steps: 100
+  max_grad_norm: 1.0
+  # QA-specific
+  max_answer_length: 30
+  n_best_size: 20
+  doc_stride: 128  # For sliding window over long contexts

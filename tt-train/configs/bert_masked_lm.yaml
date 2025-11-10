@@ -1,0 +1,34 @@
+# BERT Masked Language Modeling Configuration
+# For MLM pre-training or fine-tuning
+
+# Base BERT configuration
+bert_config:
+  vocab_size: 30522
+  max_sequence_length: 512
+  embedding_dim: 768
+  intermediate_size: 3072
+  num_heads: 12
+  num_blocks: 12
+  dropout_prob: 0.1
+  layer_norm_eps: 1.0e-12
+  use_token_type_embeddings: true
+  type_vocab_size: 2
+  runner_type: default  # or memory_efficient
+
+# Task-specific configuration
+tie_word_embeddings: true  # Standard BERT practice: tie decoder with input embeddings
+
+# Optional: Training configuration
+training:
+  learning_rate: 5.0e-5
+  weight_decay: 0.01
+  batch_size: 32
+  num_epochs: 3
+  warmup_steps: 10000
+  max_grad_norm: 1.0
+  # MLM-specific
+  mlm_probability: 0.15  # Probability of masking tokens
+  # Masking strategy:
+  # - 80% replaced with [MASK]
+  # - 10% replaced with random token
+  # - 10% kept unchanged

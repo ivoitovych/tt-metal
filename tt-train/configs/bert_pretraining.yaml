@@ -1,0 +1,45 @@
+# BERT Pre-Training Configuration
+# For combined MLM + NSP pre-training (BERT-style)
+
+# Base BERT configuration
+bert_config:
+  vocab_size: 30522
+  max_sequence_length: 512
+  embedding_dim: 768
+  intermediate_size: 3072
+  num_heads: 12
+  num_blocks: 12
+  dropout_prob: 0.1
+  layer_norm_eps: 1.0e-12
+  use_token_type_embeddings: true  # Required for NSP
+  type_vocab_size: 2
+  runner_type: default  # or memory_efficient
+
+# Task-specific configuration
+tie_word_embeddings: true  # Standard BERT practice
+mlm_loss_weight: 1.0  # Weight for masked language modeling loss
+nsp_loss_weight: 1.0  # Weight for next sentence prediction loss
+
+# Optional: Training configuration
+training:
+  learning_rate: 1.0e-4
+  weight_decay: 0.01
+  batch_size: 256  # Large batch for pre-training
+  num_epochs: 40  # Or train for N steps
+  warmup_steps: 10000
+  max_grad_norm: 1.0
+
+  # MLM-specific
+  mlm_probability: 0.15
+  # Masking strategy:
+  # - 80% replaced with [MASK]
+  # - 10% replaced with random token
+  # - 10% kept unchanged
+
+  # NSP-specific
+  # 50% of sentence pairs are actual next sentences
+  # 50% are random sentences from corpus
+
+  # Optimization
+  gradient_accumulation_steps: 1
+  mixed_precision: false  # Enable for faster training
