@@ -10,6 +10,7 @@
 #include "autograd/tensor.hpp"
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
+#include "ops/bert_losses.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/distributed/comm_ops.hpp"
 #include "ops/dropout_op.hpp"
@@ -31,6 +32,7 @@ using namespace ttml::ops;
 void py_module_types(nb::module_& m) {
     ttml::nanobind::util::export_enum<ReduceType>(m);
 
+    m.def_submodule("bert_losses");
     m.def_submodule("binary");
     m.def_submodule("distributed");
     m.def_submodule("dropout");
@@ -177,6 +179,61 @@ void py_module(nb::module_& m) {
             nb::arg("prediction"),
             nb::arg("target"),
             nb::arg("reduce") = ReduceType::MEAN);
+    }
+
+    {
+        auto py_bert_losses = static_cast<nb::module_>(m.attr("bert_losses"));
+        py_bert_losses.def(
+            "compute_sequence_classification_loss",
+            &ttml::ops::bert_losses::compute_sequence_classification_loss,
+            nb::arg("logits"),
+            nb::arg("labels"),
+            "Compute cross-entropy loss for sequence classification");
+        py_bert_losses.def(
+            "compute_token_classification_loss",
+            &ttml::ops::bert_losses::compute_token_classification_loss,
+            nb::arg("logits"),
+            nb::arg("labels"),
+            nb::arg("attention_mask") = nullptr,
+            "Compute token classification loss with optional attention mask");
+        py_bert_losses.def(
+            "compute_question_answering_loss",
+            &ttml::ops::bert_losses::compute_question_answering_loss,
+            nb::arg("combined_logits"),
+            nb::arg("start_positions"),
+            nb::arg("end_positions"),
+            "Compute QA loss from combined start/end logits");
+        py_bert_losses.def(
+            "compute_question_answering_loss_split",
+            &ttml::ops::bert_losses::compute_question_answering_loss_split,
+            nb::arg("start_logits"),
+            nb::arg("end_logits"),
+            nb::arg("start_positions"),
+            nb::arg("end_positions"),
+            "Compute QA loss from separate start/end logits");
+        py_bert_losses.def(
+            "compute_masked_lm_loss",
+            &ttml::ops::bert_losses::compute_masked_lm_loss,
+            nb::arg("logits"),
+            nb::arg("labels"),
+            nb::arg("attention_mask") = nullptr,
+            "Compute masked language modeling loss");
+        py_bert_losses.def(
+            "compute_nsp_loss",
+            &ttml::ops::bert_losses::compute_nsp_loss,
+            nb::arg("logits"),
+            nb::arg("labels"),
+            "Compute next sentence prediction loss");
+        py_bert_losses.def(
+            "compute_pretraining_loss",
+            &ttml::ops::bert_losses::compute_pretraining_loss,
+            nb::arg("mlm_logits"),
+            nb::arg("nsp_logits"),
+            nb::arg("mlm_labels"),
+            nb::arg("nsp_labels"),
+            nb::arg("mlm_weight") = 1.0F,
+            nb::arg("nsp_weight") = 1.0F,
+            "Compute combined pretraining loss (MLM + NSP)");
     }
 
     {

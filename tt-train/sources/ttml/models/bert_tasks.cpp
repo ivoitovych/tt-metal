@@ -4,6 +4,7 @@
 #include "bert_tasks.hpp"
 
 #include "autograd/auto_context.hpp"
+#include "models/bert_tasks_serialization.hpp"
 #include "models/common/transformer_common.hpp"
 
 namespace ttml::models::bert {
@@ -54,10 +55,18 @@ void BertForSequenceClassification::load_from_safetensors(const std::filesystem:
     // Load base BERT
     m_bert->load_from_safetensors(model_path);
 
-    // Head weights will be randomly initialized if not present
-    // This matches HuggingFace behavior for fine-tuning
-    fmt::print("Note: Classifier head weights are randomly initialized.\n");
-    fmt::print("      Fine-tune the model on your classification task.\n");
+    // Load head weights if available
+    // HF format: "classifier.weight", "classifier.bias"
+    // TTML format: "bert_for_sequence_classification/classifier/classifier/weight", etc.
+    auto parameters = this->parameters();
+
+    std::map<std::string, std::string> weight_mapping = {
+        {"classifier.weight", "bert_for_sequence_classification/classifier/classifier/weight"},
+        {"classifier.bias", "bert_for_sequence_classification/classifier/classifier/bias"}};
+
+    load_task_head_weights(model_path, parameters, weight_mapping, "SequenceClassification");
+
+    fmt::print("Model loaded successfully\n");
 }
 
 // ============================================================================
@@ -103,8 +112,16 @@ void BertForTokenClassification::load_from_safetensors(const std::filesystem::pa
 
     m_bert->load_from_safetensors(model_path);
 
-    fmt::print("Note: Token classification head weights are randomly initialized.\n");
-    fmt::print("      Fine-tune the model on your token classification task.\n");
+    // Load head weights if available
+    auto parameters = this->parameters();
+
+    std::map<std::string, std::string> weight_mapping = {
+        {"classifier.weight", "bert_for_token_classification/classifier/classifier/weight"},
+        {"classifier.bias", "bert_for_token_classification/classifier/classifier/bias"}};
+
+    load_task_head_weights(model_path, parameters, weight_mapping, "TokenClassification");
+
+    fmt::print("Model loaded successfully\n");
 }
 
 // ============================================================================
@@ -149,8 +166,16 @@ void BertForQuestionAnswering::load_from_safetensors(const std::filesystem::path
 
     m_bert->load_from_safetensors(model_path);
 
-    fmt::print("Note: QA head weights are randomly initialized.\n");
-    fmt::print("      Fine-tune the model on your QA task.\n");
+    // Load head weights if available
+    auto parameters = this->parameters();
+
+    std::map<std::string, std::string> weight_mapping = {
+        {"qa_outputs.weight", "bert_for_question_answering/qa_outputs/qa_outputs/weight"},
+        {"qa_outputs.bias", "bert_for_question_answering/qa_outputs/qa_outputs/bias"}};
+
+    load_task_head_weights(model_path, parameters, weight_mapping, "QuestionAnswering");
+
+    fmt::print("Model loaded successfully\n");
 }
 
 // ============================================================================
@@ -203,8 +228,22 @@ void BertForMaskedLM::load_from_safetensors(const std::filesystem::path& model_p
 
     m_bert->load_from_safetensors(model_path);
 
-    // MLM head weights will be loaded or randomly initialized
-    fmt::print("Note: MLM head loaded from checkpoint or randomly initialized.\n");
+    // Load MLM head weights if available
+    // HF uses "cls.predictions" prefix for the MLM head
+    auto parameters = this->parameters();
+
+    std::map<std::string, std::string> weight_mapping = {
+        {"cls.predictions.transform.dense.weight", "bert_for_masked_lm/cls.predictions/transform.dense/weight"},
+        {"cls.predictions.transform.dense.bias", "bert_for_masked_lm/cls.predictions/transform.dense/bias"},
+        {"cls.predictions.transform.LayerNorm.weight", "bert_for_masked_lm/cls.predictions/transform.LayerNorm/weight"},
+        {"cls.predictions.transform.LayerNorm.bias", "bert_for_masked_lm/cls.predictions/transform.LayerNorm/bias"},
+        {"cls.predictions.decoder.weight", "bert_for_masked_lm/cls.predictions/decoder/weight"},
+        {"cls.predictions.bias",  // HF stores decoder bias separately
+         "bert_for_masked_lm/cls.predictions/decoder/bias"}};
+
+    load_task_head_weights(model_path, parameters, weight_mapping, "MaskedLM");
+
+    fmt::print("Model loaded successfully\n");
 }
 
 // ============================================================================
@@ -272,7 +311,24 @@ void BertForPreTraining::load_from_safetensors(const std::filesystem::path& mode
 
     m_bert->load_from_safetensors(model_path);
 
-    // MLM and NSP head weights will be loaded or randomly initialized
+    // Load both MLM and NSP head weights if available
+    auto parameters = this->parameters();
+
+    std::map<std::string, std::string> weight_mapping = {
+        // MLM head (same as BertForMaskedLM)
+        {"cls.predictions.transform.dense.weight", "bert_for_pretraining/cls.predictions/transform.dense/weight"},
+        {"cls.predictions.transform.dense.bias", "bert_for_pretraining/cls.predictions/transform.dense/bias"},
+        {"cls.predictions.transform.LayerNorm.weight",
+         "bert_for_pretraining/cls.predictions/transform.LayerNorm/weight"},
+        {"cls.predictions.transform.LayerNorm.bias", "bert_for_pretraining/cls.predictions/transform.LayerNorm/bias"},
+        {"cls.predictions.decoder.weight", "bert_for_pretraining/cls.predictions/decoder/weight"},
+        {"cls.predictions.bias", "bert_for_pretraining/cls.predictions/decoder/bias"},
+        // NSP head
+        {"cls.seq_relationship.weight", "bert_for_pretraining/cls.seq_relationship/seq_relationship/weight"},
+        {"cls.seq_relationship.bias", "bert_for_pretraining/cls.seq_relationship/seq_relationship/bias"}};
+
+    load_task_head_weights(model_path, parameters, weight_mapping, "PreTraining");
+
     fmt::print("PreTraining model loaded successfully\n");
 }
 

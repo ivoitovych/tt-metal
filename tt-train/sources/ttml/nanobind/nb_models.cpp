@@ -12,6 +12,7 @@
 
 #include "models/base_transformer.hpp"
 #include "models/bert.hpp"
+#include "models/bert_tasks.hpp"
 #include "models/distributed/gpt2.hpp"
 #include "models/distributed/llama.hpp"
 #include "models/distributed/pipeline_parallel_llama.hpp"
@@ -40,6 +41,26 @@ void py_module_types(nb::module_& m, nb::module_& m_modules) {
         auto py_bert_module = m.def_submodule("bert");
         nb::class_<models::bert::BertConfig>(py_bert_module, "BertConfig");
         nb::class_<models::bert::Bert, models::BaseTransformer>(py_bert_module, "Bert");
+
+        // Task-specific configs
+        nb::class_<models::bert::SequenceClassificationConfig>(py_bert_module, "SequenceClassificationConfig");
+        nb::class_<models::bert::TokenClassificationConfig>(py_bert_module, "TokenClassificationConfig");
+        nb::class_<models::bert::QuestionAnsweringConfig>(py_bert_module, "QuestionAnsweringConfig");
+        nb::class_<models::bert::MaskedLMConfig>(py_bert_module, "MaskedLMConfig");
+        nb::class_<models::bert::PreTrainingConfig>(py_bert_module, "PreTrainingConfig");
+
+        // Task models
+        nb::class_<models::bert::BertForSequenceClassification, models::BaseTransformer>(
+            py_bert_module, "BertForSequenceClassification");
+        nb::class_<models::bert::BertForTokenClassification, models::BaseTransformer>(
+            py_bert_module, "BertForTokenClassification");
+        nb::class_<models::bert::BertForQuestionAnswering, models::BaseTransformer>(
+            py_bert_module, "BertForQuestionAnswering");
+        nb::class_<models::bert::BertForMaskedLM, models::BaseTransformer>(py_bert_module, "BertForMaskedLM");
+        nb::class_<models::bert::BertForPreTraining, models::BaseTransformer>(py_bert_module, "BertForPreTraining");
+
+        // PreTrainingOutput struct
+        nb::class_<models::bert::BertForPreTraining::PreTrainingOutput>(py_bert_module, "PreTrainingOutput");
     }
 
     {
@@ -197,6 +218,95 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
             "num_blocks",
             [](const models::bert::Bert& self) { return self.get_config().num_blocks; },
             "Get the number of blocks in the model");
+
+        // ====================================================================
+        // Task-specific configs
+        // ====================================================================
+
+        auto py_seq_cls_config = static_cast<nb::class_<models::bert::SequenceClassificationConfig>>(
+            py_bert_module.attr("SequenceClassificationConfig"));
+        py_seq_cls_config.def(nb::init<>());
+        py_seq_cls_config.def_rw("bert_config", &models::bert::SequenceClassificationConfig::bert_config);
+        py_seq_cls_config.def_rw("num_labels", &models::bert::SequenceClassificationConfig::num_labels);
+        py_seq_cls_config.def_rw("classifier_dropout", &models::bert::SequenceClassificationConfig::classifier_dropout);
+
+        auto py_token_cls_config = static_cast<nb::class_<models::bert::TokenClassificationConfig>>(
+            py_bert_module.attr("TokenClassificationConfig"));
+        py_token_cls_config.def(nb::init<>());
+        py_token_cls_config.def_rw("bert_config", &models::bert::TokenClassificationConfig::bert_config);
+        py_token_cls_config.def_rw("num_labels", &models::bert::TokenClassificationConfig::num_labels);
+        py_token_cls_config.def_rw("classifier_dropout", &models::bert::TokenClassificationConfig::classifier_dropout);
+
+        auto py_qa_config = static_cast<nb::class_<models::bert::QuestionAnsweringConfig>>(
+            py_bert_module.attr("QuestionAnsweringConfig"));
+        py_qa_config.def(nb::init<>());
+        py_qa_config.def_rw("bert_config", &models::bert::QuestionAnsweringConfig::bert_config);
+
+        auto py_mlm_config =
+            static_cast<nb::class_<models::bert::MaskedLMConfig>>(py_bert_module.attr("MaskedLMConfig"));
+        py_mlm_config.def(nb::init<>());
+        py_mlm_config.def_rw("bert_config", &models::bert::MaskedLMConfig::bert_config);
+        py_mlm_config.def_rw("tie_word_embeddings", &models::bert::MaskedLMConfig::tie_word_embeddings);
+
+        auto py_pretrain_config =
+            static_cast<nb::class_<models::bert::PreTrainingConfig>>(py_bert_module.attr("PreTrainingConfig"));
+        py_pretrain_config.def(nb::init<>());
+        py_pretrain_config.def_rw("bert_config", &models::bert::PreTrainingConfig::bert_config);
+        py_pretrain_config.def_rw("tie_word_embeddings", &models::bert::PreTrainingConfig::tie_word_embeddings);
+        py_pretrain_config.def_rw("mlm_loss_weight", &models::bert::PreTrainingConfig::mlm_loss_weight);
+        py_pretrain_config.def_rw("nsp_loss_weight", &models::bert::PreTrainingConfig::nsp_loss_weight);
+
+        // ====================================================================
+        // Task models
+        // ====================================================================
+
+        auto py_seq_cls = static_cast<nb::class_<models::bert::BertForSequenceClassification, models::BaseTransformer>>(
+            py_bert_module.attr("BertForSequenceClassification"));
+        py_seq_cls.def(nb::init<const models::bert::SequenceClassificationConfig&>());
+        py_seq_cls.def("get_num_labels", &models::bert::BertForSequenceClassification::get_num_labels);
+
+        auto py_token_cls = static_cast<nb::class_<models::bert::BertForTokenClassification, models::BaseTransformer>>(
+            py_bert_module.attr("BertForTokenClassification"));
+        py_token_cls.def(nb::init<const models::bert::TokenClassificationConfig&>());
+        py_token_cls.def("get_num_labels", &models::bert::BertForTokenClassification::get_num_labels);
+
+        auto py_qa = static_cast<nb::class_<models::bert::BertForQuestionAnswering, models::BaseTransformer>>(
+            py_bert_module.attr("BertForQuestionAnswering"));
+        py_qa.def(nb::init<const models::bert::QuestionAnsweringConfig&>());
+
+        auto py_mlm = static_cast<nb::class_<models::bert::BertForMaskedLM, models::BaseTransformer>>(
+            py_bert_module.attr("BertForMaskedLM"));
+        py_mlm.def(nb::init<const models::bert::MaskedLMConfig&>());
+        py_mlm.def("has_tied_embeddings", &models::bert::BertForMaskedLM::has_tied_embeddings);
+
+        auto py_pretrain = static_cast<nb::class_<models::bert::BertForPreTraining, models::BaseTransformer>>(
+            py_bert_module.attr("BertForPreTraining"));
+        py_pretrain.def(nb::init<const models::bert::PreTrainingConfig&>());
+        py_pretrain.def("forward_pretraining", &models::bert::BertForPreTraining::forward_pretraining);
+
+        // PreTrainingOutput struct
+        auto py_pretrain_output = static_cast<nb::class_<models::bert::BertForPreTraining::PreTrainingOutput>>(
+            py_bert_module.attr("PreTrainingOutput"));
+        py_pretrain_output.def(nb::init<>());
+        py_pretrain_output.def_rw("mlm_logits", &models::bert::BertForPreTraining::PreTrainingOutput::mlm_logits);
+        py_pretrain_output.def_rw("nsp_logits", &models::bert::BertForPreTraining::PreTrainingOutput::nsp_logits);
+
+        // Factory functions
+        py_bert_module.def(
+            "create_for_sequence_classification",
+            &models::bert::create_for_sequence_classification,
+            "Create BERT sequence classification model");
+        py_bert_module.def(
+            "create_for_token_classification",
+            &models::bert::create_for_token_classification,
+            "Create BERT token classification model");
+        py_bert_module.def(
+            "create_for_question_answering",
+            &models::bert::create_for_question_answering,
+            "Create BERT question answering model");
+        py_bert_module.def("create_for_masked_lm", &models::bert::create_for_masked_lm, "Create BERT masked LM model");
+        py_bert_module.def(
+            "create_for_pretraining", &models::bert::create_for_pretraining, "Create BERT pretraining model");
     }
 
     {

@@ -1,0 +1,28 @@
+# BERT Sequence Classification Configuration
+# Example: Sentiment analysis, intent classification
+
+bert_config:
+  vocab_size: 30522
+  max_sequence_length: 128
+  embedding_dim: 768
+  intermediate_size: 3072
+  num_heads: 12
+  num_blocks: 12
+  dropout_prob: 0.1
+  layer_norm_eps: 1.0e-12
+  use_token_type_embeddings: true
+  type_vocab_size: 2
+  runner_type: default  # or memory_efficient
+
+# Task-specific configuration
+num_labels: 2  # Binary classification (e.g., positive/negative)
+classifier_dropout: 0.1
+
+# Optional: Training configuration
+training:
+  learning_rate: 2.0e-5
+  weight_decay: 0.01
+  batch_size: 16
+  num_epochs: 3
+  warmup_steps: 500
+  max_grad_norm: 1.0

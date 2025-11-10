@@ -62,6 +62,9 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/models/base_transformer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/bert.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/bert.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/bert_tasks.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/bert_tasks.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/bert_tasks_serialization.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/gpt2.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/gpt2.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/linear_regression.cpp
@@ -82,6 +85,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/multi_head_attention.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/bert_block.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/bert_block.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/bert_heads.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/bert_heads.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/dropout_module.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/dropout_module.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/embedding_module.cpp
@@ -128,6 +133,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/linear_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/losses.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/losses.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/bert_losses.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/bert_losses.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/matmul_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/matmul_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/multi_head_utils.cpp

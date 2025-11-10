@@ -1,0 +1,25 @@
+# BERT Token Classification Configuration
+# Example: Named Entity Recognition (NER), Part-of-Speech tagging
+
+bert_config:
+  vocab_size: 30522
+  max_sequence_length: 128
+  embedding_dim: 768
+  intermediate_size: 3072
+  num_heads: 12
+  num_blocks: 12
+  dropout_prob: 0.1
+  layer_norm_eps: 1.0e-12
+  use_token_type_embeddings: true
+  type_vocab_size: 2
+  runner_type: default
+
+# Task-specific configuration
+num_labels: 9  # Example: BIO format (B-PER, I-PER, B-LOC, I-LOC, B-ORG, I-ORG, B-MISC, I-MISC, O)
+classifier_dropout: 0.1
+
+training:
+  learning_rate: 5.0e-5
+  weight_decay: 0.01
+  batch_size: 32
+  num_epochs: 3
