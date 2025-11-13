@@ -264,20 +264,56 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
             py_bert_module.attr("BertForSequenceClassification"));
         py_seq_cls.def(nb::init<const models::bert::SequenceClassificationConfig&>());
         py_seq_cls.def("get_num_labels", &models::bert::BertForSequenceClassification::get_num_labels);
+        py_seq_cls.def(
+            "__call__",
+            static_cast<autograd::TensorPtr (models::bert::BertForSequenceClassification::*)(
+                const autograd::TensorPtr&, const autograd::TensorPtr&, const autograd::TensorPtr&)>(
+                &models::bert::BertForSequenceClassification::operator()),
+            nb::arg("input_ids"),
+            nb::arg("attention_mask") = nullptr,
+            nb::arg("token_type_ids") = nullptr,
+            "BertForSequenceClassification forward pass");
 
         auto py_token_cls = static_cast<nb::class_<models::bert::BertForTokenClassification, models::BaseTransformer>>(
             py_bert_module.attr("BertForTokenClassification"));
         py_token_cls.def(nb::init<const models::bert::TokenClassificationConfig&>());
         py_token_cls.def("get_num_labels", &models::bert::BertForTokenClassification::get_num_labels);
+        py_token_cls.def(
+            "__call__",
+            static_cast<autograd::TensorPtr (models::bert::BertForTokenClassification::*)(
+                const autograd::TensorPtr&, const autograd::TensorPtr&, const autograd::TensorPtr&)>(
+                &models::bert::BertForTokenClassification::operator()),
+            nb::arg("input_ids"),
+            nb::arg("attention_mask") = nullptr,
+            nb::arg("token_type_ids") = nullptr,
+            "BertForTokenClassification forward pass");
 
         auto py_qa = static_cast<nb::class_<models::bert::BertForQuestionAnswering, models::BaseTransformer>>(
             py_bert_module.attr("BertForQuestionAnswering"));
         py_qa.def(nb::init<const models::bert::QuestionAnsweringConfig&>());
+        py_qa.def(
+            "__call__",
+            static_cast<autograd::TensorPtr (models::bert::BertForQuestionAnswering::*)(
+                const autograd::TensorPtr&, const autograd::TensorPtr&, const autograd::TensorPtr&)>(
+                &models::bert::BertForQuestionAnswering::operator()),
+            nb::arg("input_ids"),
+            nb::arg("attention_mask") = nullptr,
+            nb::arg("token_type_ids") = nullptr,
+            "BertForQuestionAnswering forward pass");
 
         auto py_mlm = static_cast<nb::class_<models::bert::BertForMaskedLM, models::BaseTransformer>>(
             py_bert_module.attr("BertForMaskedLM"));
         py_mlm.def(nb::init<const models::bert::MaskedLMConfig&>());
         py_mlm.def("has_tied_embeddings", &models::bert::BertForMaskedLM::has_tied_embeddings);
+        py_mlm.def(
+            "__call__",
+            static_cast<autograd::TensorPtr (models::bert::BertForMaskedLM::*)(
+                const autograd::TensorPtr&, const autograd::TensorPtr&, const autograd::TensorPtr&)>(
+                &models::bert::BertForMaskedLM::operator()),
+            nb::arg("input_ids"),
+            nb::arg("attention_mask") = nullptr,
+            nb::arg("token_type_ids") = nullptr,
+            "BertForMaskedLM forward pass");
 
         auto py_pretrain = static_cast<nb::class_<models::bert::BertForPreTraining, models::BaseTransformer>>(
             py_bert_module.attr("BertForPreTraining"));

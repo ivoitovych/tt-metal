@@ -216,13 +216,16 @@ def test_bert_qkv_loading_golden_reference(model_name, batch_size, seq_len):
     # Convert inputs to TTML tensors
     input_ids_np = input_ids.numpy().astype(np.float32)
     token_type_ids_np = token_type_ids.numpy().astype(np.float32)
+    # Create attention mask (all ones since no padding)
+    attention_mask_np = np.ones((batch_size, seq_len), dtype=np.float32)
 
     input_ids_ttml = ttml.autograd.Tensor.from_numpy(input_ids_np.reshape(batch_size, 1, 1, seq_len))
+    attention_mask_ttml = ttml.autograd.Tensor.from_numpy(attention_mask_np.reshape(batch_size, 1, 1, seq_len))
     token_type_ids_ttml = ttml.autograd.Tensor.from_numpy(token_type_ids_np.reshape(batch_size, 1, 1, seq_len))
 
     # Run TTML BERT forward pass
     print("Running TTML BERT forward pass...")
-    ttml_output = bert(input_ids_ttml, token_type_ids_ttml)
+    ttml_output = bert(input_ids_ttml, attention_mask_ttml, token_type_ids_ttml)
     ttml_output_np = ttml_output.to_numpy()
 
     print(f"TTML output shape: {ttml_output_np.shape}")
