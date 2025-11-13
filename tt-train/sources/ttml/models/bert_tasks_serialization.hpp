@@ -32,13 +32,19 @@ inline void load_task_head_weights(
     const std::string& task_name) {
     bool head_weights_found = false;
 
-    for (const auto& entry : std::filesystem::directory_iterator(model_path)) {
-        if (entry.path().extension() != ".safetensors") {
-            continue;
+    // Collect paths to process (handle both file and directory inputs)
+    std::vector<std::filesystem::path> paths_to_process;
+    if (std::filesystem::is_regular_file(model_path) && model_path.extension() == ".safetensors") {
+        paths_to_process.push_back(model_path);
+    } else if (std::filesystem::is_directory(model_path)) {
+        for (const auto& entry : std::filesystem::directory_iterator(model_path)) {
+            if (entry.path().extension() == ".safetensors") {
+                paths_to_process.push_back(entry.path());
+            }
         }
+    }
 
-        auto path = entry.path();
-
+    for (const auto& path : paths_to_process) {
         serialization::SafetensorSerialization::TensorCallback loading_callback =
             [&parameters, &weight_mapping, &head_weights_found](
                 const serialization::SafetensorSerialization::TensorInfo& info, std::span<const std::byte> bytes) {

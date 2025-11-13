@@ -385,12 +385,23 @@ Bert::IntermediateOutputs Bert::forward_with_intermediates(
 }
 
 void Bert::load_from_safetensors(const std::filesystem::path& model_path) {
-    for (const auto& entry : std::filesystem::directory_iterator(model_path)) {
-        if (entry.path().extension() == ".safetensors") {
-            auto path = entry.path();
-            fmt::print("Loading BERT model from: {}\n", path.string());
+    // Handle both single file and directory paths
+    if (std::filesystem::is_regular_file(model_path)) {
+        // Single file case
+        if (model_path.extension() == ".safetensors") {
+            fmt::print("Loading BERT model from: {}\n", model_path.string());
             auto parameters = this->parameters();
-            load_model_from_safetensors(path, parameters);
+            load_model_from_safetensors(model_path, parameters);
+        }
+    } else if (std::filesystem::is_directory(model_path)) {
+        // Directory case - iterate through all .safetensors files
+        for (const auto& entry : std::filesystem::directory_iterator(model_path)) {
+            if (entry.path().extension() == ".safetensors") {
+                auto path = entry.path();
+                fmt::print("Loading BERT model from: {}\n", path.string());
+                auto parameters = this->parameters();
+                load_model_from_safetensors(path, parameters);
+            }
         }
     }
 }
