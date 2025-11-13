@@ -76,7 +76,7 @@ def test_bert_base_uncased_layer_by_layer():
     ttml_config.use_pooler = True
 
     ttml_model = ttml.models.bert.create(ttml_config)
-    ttml_model.load_from_safetensors(str(safetensors_path))
+    ttml_model.load_model_from_safetensors(str(safetensors_path))
 
     print("TTML model loaded\n")
 

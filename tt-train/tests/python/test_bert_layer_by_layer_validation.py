@@ -147,7 +147,7 @@ def test_bert_layer_by_layer_comparison():
     ttml_config.use_pooler = True
 
     ttml_model = ttml.models.bert.create(ttml_config)
-    ttml_model.load_from_safetensors(str(safetensors_path))
+    ttml_model.load_model_from_safetensors(str(safetensors_path))
 
     print("TTML model loaded\n")
 
