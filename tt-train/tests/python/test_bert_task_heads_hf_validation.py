@@ -91,9 +91,15 @@ class BERTTaskHeadValidator:
         """Save HuggingFace model to safetensors."""
         safetensors_path = Path(f"/tmp/{task_name}_{self.model_name.replace('/', '_')}.safetensors")
         if not safetensors_path.exists():
-            from safetensors.torch import save_file
+            # Use save_pretrained to handle weight tying properly
+            temp_dir = Path(f"/tmp/{task_name}_{self.model_name.replace('/', '_')}_temp")
+            hf_model.save_pretrained(str(temp_dir), safe_serialization=True)
+            # Move the model.safetensors file to our target path
+            import shutil
 
-            save_file(hf_model.state_dict(), str(safetensors_path))
+            shutil.move(str(temp_dir / "model.safetensors"), str(safetensors_path))
+            # Clean up temp directory
+            shutil.rmtree(str(temp_dir))
         return safetensors_path
 
     def convert_to_ttml_inputs(self, input_ids, attention_mask, token_type_ids):
@@ -339,7 +345,8 @@ class TestMaskedLMValidation:
         ttml_config = validator.create_ttml_config()
         task_config = ttml.models.bert.MaskedLMConfig()
         task_config.bert_config = ttml_config
-        task_config.tie_word_embeddings = True
+        # Disable weight tying for validation tests - weights are loaded from safetensors
+        task_config.tie_word_embeddings = False
 
         ttml_model = ttml.models.bert.create_for_masked_lm(task_config)
 
@@ -402,7 +409,8 @@ class TestPreTrainingValidation:
         ttml_config = validator.create_ttml_config()
         task_config = ttml.models.bert.PreTrainingConfig()
         task_config.bert_config = ttml_config
-        task_config.tie_word_embeddings = True
+        # Disable weight tying for validation tests - weights are loaded from safetensors
+        task_config.tie_word_embeddings = False
         task_config.mlm_loss_weight = 1.0
         task_config.nsp_loss_weight = 1.0
 

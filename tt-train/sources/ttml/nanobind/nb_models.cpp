@@ -141,6 +141,7 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
             "use_token_type_embeddings",
             &models::bert::BertConfig::use_token_type_embeddings,
             "Use token type embeddings");
+        py_bert_config.def_rw("type_vocab_size", &models::bert::BertConfig::type_vocab_size, "Type vocabulary size");
         py_bert_config.def_rw("runner_type", &models::bert::BertConfig::runner_type, "Runner type");
         py_bert_config.def_rw("use_pooler", &models::bert::BertConfig::use_pooler, "Use pooler");
 
