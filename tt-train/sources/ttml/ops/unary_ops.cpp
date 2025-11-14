@@ -94,6 +94,8 @@ autograd::TensorPtr log_softmax(const autograd::TensorPtr& tensor, int dim) {
 }
 
 autograd::TensorPtr log_softmax_moreh(const autograd::TensorPtr& tensor, int dim) {
+    // NOTE: Using FP32 accumulation workaround for softmax precision bug
+    // TODO: Change to softmax(false) once TTNN fixes bfloat16 softmax kernel
     auto log_softmax = ttnn::moreh_softmax(
         tensor->get_value(),
         /* axis */ dim,
@@ -101,7 +103,7 @@ autograd::TensorPtr log_softmax_moreh(const autograd::TensorPtr& tensor, int dim
         ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOp::LOGSOFTMAX,
         ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOpParallelizationStrategy::NONE,
         /* output_mem_config */ std::nullopt,
-        /* compute_kernel_config */ core::ComputeKernelConfig::softmax());
+        /* compute_kernel_config */ core::ComputeKernelConfig::softmax(/* use_fp32_accumulation_workaround */ true));
     auto out = autograd::create_tensor(log_softmax);
 
     autograd::GradFunction grad = [tensor, out, dim]() {

@@ -14,9 +14,9 @@ tt::tt_metal::Tensor sum_over_batch(const tt::tt_metal::Tensor& t);
 tt::tt_metal::Tensor log_softmax(const tt::tt_metal::Tensor& t, int dim);
 
 // ⚠️ WARNING: use_fp32_accumulation_workaround=true causes PERFORMANCE DEGRADATION
-// Defaults to true as TEMPORARY WORKAROUND for TTNN bfloat16 softmax precision bug
-// TODO: Change default to false once TTNN fixes bfloat16 softmax kernel
-tt::tt_metal::Tensor softmax(const tt::tt_metal::Tensor& t, int dim, bool use_fp32_accumulation_workaround = true);
+// Default is false (native bfloat16) to preserve TTNN framework behavior.
+// Only workaround code should explicitly pass true when needed.
+tt::tt_metal::Tensor softmax(const tt::tt_metal::Tensor& t, int dim, bool use_fp32_accumulation_workaround = false);
 
 tt::tt_metal::Tensor divide(const tt::tt_metal::Tensor& a, const tt::tt_metal::Tensor& b);
 
