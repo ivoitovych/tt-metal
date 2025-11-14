@@ -260,29 +260,68 @@ Through sub-operation analysis, the bug was isolated to the **softmax operation 
 - Output values compressed toward zero
 - Only visible with real BERT data, not random test data
 
-### Current Workaround (NOT A FIX)
+### Current Workaround (NOT A FIX - PERFORMANCE DEGRADATION)
 
-**Temporary Workaround**: Enable FP32 accumulation in softmax
-**File**: `sources/ttml/core/compute_kernel_config.cpp`
-**Change**: Set `fp32_dest_acc_en = true` in `ComputeKernelConfig::softmax()`
+## ⚠️ CRITICAL WARNING: THIS IS A WORKAROUND WITH PERFORMANCE PENALTY ⚠️
+
+**What was done**: Force FP32 accumulation in softmax operations (instead of native bfloat16)
+
+**Files modified**:
+- `sources/ttml/core/compute_kernel_config.cpp` - Added `use_fp32_accumulation_workaround` parameter
+- `sources/ttml/core/compute_kernel_config.hpp` - Defaults to `true` (FP32 accumulation)
+- `sources/ttml/ttnn_fixed/trivial_ttnn_ops.cpp` - Passes workaround flag to config
+- `sources/ttml/ttnn_fixed/trivial_ttnn_ops.hpp` - Exposed workaround parameter
+
+**Technical change**: Set `fp32_dest_acc_en = true` in `ComputeKernelConfig::softmax()`
 
 **Result with workaround**:
 - bert-tiny: All blocks PCC >0.999 ✅
 - bert-base: All 12 blocks PCC >0.999 ✅
+- bert-large: All blocks PCC >0.999 ✅
 
-**IMPORTANT**: This is a **WORKAROUND**, not a fix:
-- ⚠️ **Performance penalty**: FP32 accumulation is slower than bfloat16
-- ⚠️ **Masks root cause**: The real bug in bfloat16 softmax remains unfixed
-- ⚠️ **Not sustainable**: bfloat16 is the performance datatype we need to use
+## ⚠️ WHY THIS IS NOT ACCEPTABLE AS A PERMANENT SOLUTION ⚠️
 
-### Real Fix Needed
+**CRITICAL ISSUES**:
+1. **PERFORMANCE DEGRADATION**: FP32 accumulation is significantly slower than bfloat16
+   - bfloat16 is the performance datatype that TTNN/hardware is optimized for
+   - FP32 accumulation defeats the purpose of using specialized hardware
+   - Production workloads will suffer performance regression
+
+2. **MASKS THE REAL BUG**: The actual TTNN/hardware bfloat16 softmax bug remains unfixed
+   - Other operations work perfectly with bfloat16 (matmul, add, layernorm, etc.)
+   - Only softmax fails with bfloat16 on attention patterns
+   - This indicates a specific bug in the softmax kernel implementation
+
+3. **NOT SUSTAINABLE**: Cannot ship production BERT models with this workaround
+   - Performance-critical applications require native bfloat16 performance
+   - This breaks the TTML framework's performance guarantees
+   - Customers expect hardware-accelerated bfloat16, not FP32 fallback
+
+4. **BREAKS TTNN DESIGN**: Forces incorrect datatype usage across the framework
+   - TTNN is designed for efficient bfloat16 operations
+   - Forcing FP32 in one operation creates architectural inconsistency
+   - May cause unexpected issues in other parts of the stack
+
+### Real Fix Needed - ACTION REQUIRED FOR TTNN TEAM
 
 **The actual bug** needs to be fixed in the TTNN/hardware softmax kernel:
-- Softmax with bfloat16 accumulation must handle attention score patterns correctly
-- Other operations work fine with bfloat16 - only softmax fails
-- This is likely a hardware/kernel precision issue requiring TTNN team investigation
 
-**Next Action**: Report bug to TTNN/hardware team with reproducible test case showing softmax bfloat16 precision loss on attention patterns.
+**Bug location**: TTNN bfloat16 softmax kernel (likely in hardware or low-level kernel implementation)
+
+**Bug symptoms**:
+- Softmax with bfloat16 accumulation loses precision on BERT attention score patterns
+- PCC drops from expected >0.999 to catastrophic 0.81
+- Other bfloat16 operations (matmul, add, layernorm) work perfectly - only softmax fails
+- Bug is data-dependent: invisible in random tests, appears with real BERT data
+
+**Required fix**:
+- Fix bfloat16 accumulation in softmax kernel to handle attention score distributions correctly
+- Ensure softmax achieves PCC >0.999 with native bfloat16 accumulation (no FP32 workaround)
+- Maintain performance: bfloat16 should be as fast or faster than current FP32 workaround
+
+**Priority**: CRITICAL - Blocking production deployment of BERT models with acceptable performance
+
+**Next Action**: Report this bug to TTNN/hardware team with reproducible test case (attempted in C++ but could not isolate bug - may need full BERT model context to reproduce)
 
 ---
 

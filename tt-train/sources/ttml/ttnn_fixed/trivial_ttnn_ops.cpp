@@ -34,6 +34,11 @@ tt::tt_metal::Tensor log_softmax(const tt::tt_metal::Tensor& t, int dim) {
 
 // Stable softmax implementation
 // ttnn::softmax also exists, but it is not stable (even after max subtraction optimization)
+//
+// ⚠️ WARNING: use_fp32_accumulation_workaround=true causes PERFORMANCE DEGRADATION
+// This parameter is a TEMPORARY WORKAROUND for a TTNN bfloat16 softmax precision bug.
+// Using FP32 accumulation is SLOWER than bfloat16 and NOT a permanent solution.
+// TODO: Remove workaround parameter once TTNN bfloat16 softmax is fixed
 tt::tt_metal::Tensor softmax(const tt::tt_metal::Tensor& t, int dim, bool use_fp32_accumulation_workaround) {
     return ttnn::softmax(
         t,
