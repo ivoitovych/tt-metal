@@ -42,6 +42,7 @@
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "core/ttnn_all_includes.hpp"
+#include "metal/operations.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 namespace {
@@ -253,12 +254,45 @@ TEST(SoftmaxPrecisionBug, AttentionScorePattern) {
 
     fmt::print("\n");
 
+    // Test 3: ttml::metal::softmax (what SDPA actually uses - THIS IS THE BUG!)
+    fmt::print("Test 3: ttml::metal::softmax - WHAT SDPA USES (THE ACTUAL BUG)\n");
+    fmt::print("--------------------------------------------------------------------------------\n");
+    fmt::print("  This is the softmax implementation used in scaled_dot_product_attention\n");
+    fmt::print("  It uses custom kernel, NOT ttnn::softmax with config\n");
+    fmt::print("  This is where the bug appears!\n");
+
+    auto output_metal = ttml::metal::softmax(input_tensor, /* dim */ 3);
+    auto output_metal_vec = tensor_to_vector(output_metal);
+
+    fmt::print(
+        "  Output range: [{:.6f}, {:.6f}]\n",
+        *std::min_element(output_metal_vec.begin(), output_metal_vec.end()),
+        *std::max_element(output_metal_vec.begin(), output_metal_vec.end()));
+
+    float pcc_metal = compute_pcc(reference_output, output_metal_vec);
+    fmt::print("  PCC vs FP32 reference: {:.8f}\n", pcc_metal);
+
+    if (pcc_metal < 0.95f) {
+        fmt::print("  Status: ❌ BUG REPRODUCED! This is the buggy softmax kernel!\n");
+        fmt::print(
+            "  Values compressed: Expected [{:.2f}, {:.2f}] vs Actual [{:.2f}, {:.2f}]\n",
+            *std::min_element(reference_output.begin(), reference_output.end()),
+            *std::max_element(reference_output.begin(), reference_output.end()),
+            *std::min_element(output_metal_vec.begin(), output_metal_vec.end()),
+            *std::max_element(output_metal_vec.begin(), output_metal_vec.end()));
+    } else {
+        fmt::print("  Status: ⚠️ PCC {:.8f} - May need exact BERT data to trigger bug\n", pcc_metal);
+    }
+
+    fmt::print("\n");
+
     // Summary
     fmt::print("================================================================================\n");
     fmt::print("SUMMARY\n");
     fmt::print("================================================================================\n");
-    fmt::print("FP32 workaround PCC:  {:.8f}\n", pcc_fp32);
-    fmt::print("bfloat16 (buggy) PCC: {:.8f}\n", pcc_bfloat16);
+    fmt::print("ttnn::softmax FP32 workaround:  {:.8f}\n", pcc_fp32);
+    fmt::print("ttnn::softmax bfloat16:         {:.8f}\n", pcc_bfloat16);
+    fmt::print("ttml::metal::softmax (SDPA):    {:.8f}  <-- THE BUG IS HERE\n", pcc_metal);
     fmt::print("\n");
 
     if (pcc_bfloat16 < 0.95f) {
@@ -350,5 +384,150 @@ TEST(SoftmaxPrecisionBug, OtherBfloat16OpsWorkCorrectly) {
     fmt::print("\n");
     fmt::print("Result: Other bfloat16 operations work correctly (PCC >0.999)\n");
     fmt::print("Conclusion: The bug is SPECIFIC to softmax accumulation!\n");
+    fmt::print("================================================================================\n");
+}
+
+/**
+ * Test softmax with EXACT BERT Q@K^T scores that triggered the bug.
+ *
+ * This uses real attention scores from a BERT forward pass that showed PCC 0.81
+ * in the Python test, proving the bug is data-dependent.
+ */
+TEST(SoftmaxPrecisionBug, RealBertAttentionScores) {
+    fmt::print("\n");
+    fmt::print("================================================================================\n");
+    fmt::print("SOFTMAX BUG WITH REAL BERT DATA\n");
+    fmt::print("================================================================================\n");
+    fmt::print("Using EXACT Q@K^T scores from BERT forward pass that showed PCC 0.81\n");
+    fmt::print("Shape: [1, 1, 4, 4] (single attention head, 4 tokens)\n");
+    fmt::print("\n");
+
+    // EXACT BERT Q@K^T scores from the Python test that showed PCC 0.81
+    // These are the ACTUAL values that triggered the bug!
+    std::vector<float> bert_qk_scores = {
+        // Row 0
+        5.219008f,
+        1.280290f,
+        1.104061f,
+        -1.135963f,
+        // Row 1
+        1.384465f,
+        4.666433f,
+        1.062607f,
+        -1.122187f,
+        // Row 2
+        0.280318f,
+        0.195588f,
+        4.160985f,
+        -0.975311f,
+        // Row 3
+        -0.979774f,
+        0.733546f,
+        -0.112335f,
+        2.670743f,
+    };
+
+    fmt::print(
+        "Input range: [{:.6f}, {:.6f}]\n",
+        *std::min_element(bert_qk_scores.begin(), bert_qk_scores.end()),
+        *std::max_element(bert_qk_scores.begin(), bert_qk_scores.end()));
+
+    // Create tensor on device
+    auto input_tensor =
+        ttml::core::from_vector(bert_qk_scores, ttnn::Shape{1, 1, 4, 4}, &ttml::autograd::ctx().get_device());
+
+    // Compute reference FP32 softmax on CPU
+    std::vector<float> reference_output(16);
+    for (int row = 0; row < 4; ++row) {
+        // Find max for numerical stability
+        float max_val = bert_qk_scores[row * 4];
+        for (int col = 1; col < 4; ++col) {
+            max_val = std::max(max_val, bert_qk_scores[row * 4 + col]);
+        }
+
+        // Compute exp and sum
+        float sum = 0.0f;
+        std::vector<float> exp_vals(4);
+        for (int col = 0; col < 4; ++col) {
+            exp_vals[col] = std::exp(bert_qk_scores[row * 4 + col] - max_val);
+            sum += exp_vals[col];
+        }
+
+        // Normalize
+        for (int col = 0; col < 4; ++col) {
+            reference_output[row * 4 + col] = exp_vals[col] / sum;
+        }
+    }
+
+    fmt::print("Reference FP32 softmax computed\n");
+    fmt::print(
+        "Reference output range: [{:.6f}, {:.6f}]\n\n",
+        *std::min_element(reference_output.begin(), reference_output.end()),
+        *std::max_element(reference_output.begin(), reference_output.end()));
+
+    // Test 1: ttml::metal::softmax (what SDPA uses - THIS IS THE BUG!)
+    fmt::print("Test 1: ttml::metal::softmax - THE BUGGY IMPLEMENTATION\n");
+    fmt::print("--------------------------------------------------------------------------------\n");
+    fmt::print("  This is the softmax used by scaled_dot_product_attention\n");
+    fmt::print("  Uses bfloat16 accumulation internally (cannot be configured)\n");
+    fmt::print("  Expected: PCC ~0.81 (BUG)\n\n");
+
+    auto output_metal = ttml::metal::softmax(input_tensor, /* dim */ 3);
+    auto output_metal_vec = tensor_to_vector(output_metal);
+
+    fmt::print(
+        "  Output range: [{:.6f}, {:.6f}]\n",
+        *std::min_element(output_metal_vec.begin(), output_metal_vec.end()),
+        *std::max_element(output_metal_vec.begin(), output_metal_vec.end()));
+
+    float pcc_metal = compute_pcc(reference_output, output_metal_vec);
+    fmt::print("  PCC vs FP32 reference: {:.8f}\n", pcc_metal);
+
+    if (pcc_metal < 0.95f) {
+        fmt::print("  Status: ❌ BUG REPRODUCED! (PCC {:.8f})\n", pcc_metal);
+        fmt::print("\n  EVIDENCE OF BUG:\n");
+        fmt::print("  - Expected PCC > 0.999 for correct softmax\n");
+        fmt::print("  - Got PCC {:.8f} indicating severe precision loss\n", pcc_metal);
+        fmt::print("  - Values likely compressed toward uniform distribution\n");
+    } else {
+        fmt::print("  Status: ⚠️ UNEXPECTED - PCC {:.8f} (bug not reproduced)\n", pcc_metal);
+        fmt::print("  Note: Bug may be hardware-specific or already fixed\n");
+    }
+
+    // Test 2: ttnn::softmax with FP32 workaround (for comparison)
+    fmt::print("\nTest 2: ttnn::softmax WITH FP32 WORKAROUND\n");
+    fmt::print("--------------------------------------------------------------------------------\n");
+    fmt::print("  fp32_dest_acc_en: true (WORKAROUND)\n");
+    fmt::print("  Expected: PCC > 0.999 (workaround works)\n\n");
+
+    auto output_fp32 =
+        ttml::ttnn_fixed::softmax(input_tensor, /* dim */ 3, /* use_fp32_accumulation_workaround */ true);
+    auto output_fp32_vec = tensor_to_vector(output_fp32);
+
+    fmt::print(
+        "  Output range: [{:.6f}, {:.6f}]\n",
+        *std::min_element(output_fp32_vec.begin(), output_fp32_vec.end()),
+        *std::max_element(output_fp32_vec.begin(), output_fp32_vec.end()));
+
+    float pcc_fp32 = compute_pcc(reference_output, output_fp32_vec);
+    fmt::print("  PCC vs FP32 reference: {:.8f}\n", pcc_fp32);
+    fmt::print("  Status: {} WORKAROUND {}\n", pcc_fp32 > 0.999f ? "✅" : "❌", pcc_fp32 > 0.999f ? "WORKS" : "FAILED");
+
+    fmt::print("\n");
+    fmt::print("================================================================================\n");
+    fmt::print("SUMMARY\n");
+    fmt::print("================================================================================\n");
+    fmt::print("ttml::metal::softmax (buggy):   {:.8f}  {}\n", pcc_metal, pcc_metal < 0.95f ? "❌ BUG!" : "⚠️");
+    fmt::print("ttnn::softmax FP32 workaround:  {:.8f}  {}\n", pcc_fp32, pcc_fp32 > 0.999f ? "✅" : "❌");
+    fmt::print("\n");
+
+    if (pcc_metal < 0.95f) {
+        fmt::print("🐛 BUG SUCCESSFULLY REPRODUCED!\n");
+        fmt::print("   This test can be used for bug report to TTNN team\n");
+        fmt::print("   Root cause: bfloat16 accumulation in metal::softmax kernel\n");
+    } else {
+        fmt::print("⚠️ Bug not reproduced with this data\n");
+        fmt::print("   May be hardware-specific or already fixed in TTNN\n");
+    }
     fmt::print("================================================================================\n");
 }

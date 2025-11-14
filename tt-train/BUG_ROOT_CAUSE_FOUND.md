@@ -1,8 +1,8 @@
 # BERT Attention Bug - ROOT CAUSE IDENTIFIED
 
 **Date**: 2025-11-14
-**Status**: 🎯 **ROOT CAUSE FOUND**
-**Severity**: P0 CRITICAL BLOCKER
+**Status**: ⚠️ **BUG WORKAROUND ACTIVE - Unable to Reproduce in C++ Test**
+**Severity**: P0 CRITICAL BLOCKER (WORKAROUND DEPLOYED)
 
 ---
 
@@ -283,6 +283,62 @@ Through sub-operation analysis, the bug was isolated to the **softmax operation 
 - This is likely a hardware/kernel precision issue requiring TTNN team investigation
 
 **Next Action**: Report bug to TTNN/hardware team with reproducible test case showing softmax bfloat16 precision loss on attention patterns.
+
+---
+
+## C++ Reproduction Test Status (November 14, 2025 - Late Evening)
+
+### Test Created
+
+**File**: `tests/core/softmax_precision_test.cpp`
+**Purpose**: Standalone C++ test to reproduce softmax precision bug for TTNN bug report
+
+### Test Results
+
+Created two test cases to reproduce the bug:
+
+1. **`SoftmaxPrecisionBug.AttentionScorePattern`** - Random attention-like scores
+   - Input range: [-2, 5] (similar to BERT Q@K^T)
+   - Tests 3 softmax implementations:
+     - `ttml::ttnn_fixed::softmax` with FP32 workaround: PCC 0.99996185 ✅
+     - `ttml::ttnn_fixed::softmax` with bfloat16: PCC 0.99994928 ✅
+     - `ttml::metal::softmax` (SDPA implementation): PCC 0.99995792 ✅
+   - **Result**: Bug NOT reproduced with random data
+
+2. **`SoftmaxPrecisionBug.RealBertAttentionScores`** - Exact BERT Q@K^T scores
+   - Used exact values from Python test that showed PCC 0.81
+   - Input: 4x4 attention scores from BERT layer 0, head 0
+   - Range: [-1.135963, 5.219008]
+   - Tests:
+     - `ttml::metal::softmax` (buggy implementation): PCC 0.99999988 ✅
+     - `ttnn::softmax` with FP32 workaround: PCC 0.99999988 ✅
+   - **Result**: Bug NOT reproduced even with exact BERT data!
+
+### Critical Discovery
+
+**The bug cannot be reproduced in isolated C++ softmax tests**, even with the exact same BERT Q@K^T scores that triggered PCC 0.81 in the Python test!
+
+### Possible Explanations
+
+1. **Bug already fixed in TTNN**: The underlying TTNN softmax kernel may have been fixed between the Python test run and now
+2. **Cumulative precision loss**: The bug may only manifest after accumulation through multiple BERT layers (not visible in single softmax call)
+3. **Context-dependent bug**: May require full SDPA context (matmul → softmax → matmul chain) to trigger
+4. **Python vs C++ difference**: Python bindings may have different behavior than direct C++ calls
+
+### Current Status
+
+- ✅ **Workaround active**: FP32 accumulation in softmax (all BERT models working)
+- ⚠️ **Bug cannot be isolated**: Unable to create standalone reproduction test
+- ✅ **All BERT tests passing**: bert-tiny, bert-base, bert-large all working with workaround
+- ⚠️ **Performance impact**: FP32 accumulation slower than bfloat16 (not measured yet)
+
+### Recommendation
+
+Since the bug cannot be reproduced in isolation:
+1. **Keep the FP32 workaround active** as default behavior
+2. **Add configuration parameter** to allow opting into bfloat16 for performance testing
+3. **Monitor TTNN updates** for potential kernel fixes
+4. **Performance testing needed** to quantify FP32 vs bfloat16 performance impact
 
 ---
 
