@@ -2,7 +2,39 @@
 
 **Date**: November 14, 2025
 **Investigation Focus**: Batch processing behavior in BERT model (batch_size > 1)
-**Status**: ⚠️ Error accumulation issue identified in end-to-end execution
+**Status**: 🎯 **ROOT CAUSE IDENTIFIED - Weight Loading Corruption**
+
+---
+
+## 🚨 CRITICAL UPDATE - Weight Loading Bug Discovered
+
+**Date**: November 14, 2025
+
+### Breakthrough Finding
+
+Investigation of historical commit messages from previous branch (`ivoitovych/bert-model-for-ttml-completeness-implementation`) combined with current test results reveals:
+
+**There are TWO SEPARATE BUGS**:
+
+1. ✅ **Input Dtype Bug (FIXED)**: ttnn::embedding does NOT handle float32 inputs correctly for batch processing
+   - **Previous branch discovery**: Commit `3f7458e6e6` - "ROOT CAUSE FOUND - Token IDs must be uint32, not float32"
+   - **Fix**: Use `np.uint32` for input_ids (already applied in all current tests)
+   - **Result with random weights**: PCC = 1.0 (perfect!)
+
+2. ❌ **Weight Loading Bug (ACTIVE)**: Word embedding weights are corrupted during loading from safetensors
+   - **Current finding**: Even with uint32 inputs, word embeddings fail when using pre-trained weights
+   - **Evidence**: Word embeddings PCC = 0.975456 ❌ (vocab=30522) vs Token type PCC = 0.999999 ✅ (vocab=2)
+   - **Hypothesis**: `pad_vocab_embeddings()` or `core::from_vector()` corrupts large embedding matrices
+
+### Evidence Summary
+
+| Test Scenario | Weights | Input Dtype | Word Emb PCC | Status |
+|--------------|---------|-------------|--------------|--------|
+| Previous branch (random weights) | Random | uint32 | 1.0 | ✅ PASS |
+| Current branch (loaded weights) | Safetensors | uint32 | 0.975456 | ❌ FAIL |
+| Current branch (token type) | Safetensors | uint32 | 0.999999 | ✅ PASS |
+
+**See detailed analysis**: [`WEIGHT_LOADING_BUG_ANALYSIS.md`](./WEIGHT_LOADING_BUG_ANALYSIS.md)
 
 ---
 
