@@ -427,10 +427,24 @@ This investigation successfully created comprehensive regression tests and **ide
 
 ### Path Forward
 
-The bug is isolated to `sources/ttml/ops/embedding_op.cpp` or `sources/ttml/modules/embedding_module.cpp`, specifically how word embeddings are accessed with batch_size > 1. Investigation should focus on:
-- Index calculation for batched inputs
-- Memory layout and stride handling
-- Comparison with token type embedding implementation (which works correctly)
+**IMPORTANT UPDATE**: C++ regression tests prove the bug is NOT in `ops::embedding_op()`.
+
+**C++ Tests Results** (`tests/ops/embedding_word_vs_token_type_test.cpp`):
+- Direct `ops::embedding_op()` with random weights: PCC = 1.0 ✅
+- Large vocab (30528) with batch_size=2: PCC = 1.0 ✅
+- Small vocab (32) with batch_size=2: PCC = 1.0 ✅
+- All tests PASS - core embedding operation is correct
+
+**Actual Root Cause**:
+The bug is in **weight loading from safetensors**, not the embedding operation:
+- Python test with pre-trained weights: PCC = 0.975456 ❌
+- C++ test with random weights: PCC = 1.0 ✅
+
+Investigation should focus on:
+- `pad_vocab_embeddings()` function in `bert.cpp:486-493`
+- `core::from_vector()` weight tensor creation
+- Weight layout/transpose during safetensors loading
+- Comparison of weight tensor shapes between HuggingFace and TTML
 
 ---
 
@@ -470,7 +484,7 @@ Build time: ~3 minutes (clean build)
 
 ---
 
-**Report Generated**: 2025-11-14 (Updated: Root cause identified)
-**Investigation Complete**: Regression tests created, root cause located in word embedding lookup
-**Root Cause**: `ops::embedding_op()` with word embeddings (PCC=0.975456)
-**Next Step**: Fix word embedding lookup batch handling in `sources/ttml/ops/embedding_op.cpp`
+**Report Generated**: 2025-11-14 (Updated: Root cause narrowed to weight loading)
+**Investigation Complete**: C++ regression tests prove core embedding operation works correctly
+**Root Cause**: Weight loading from safetensors (PCC=0.975456 with pre-trained weights, PCC=1.0 with random weights)
+**Next Step**: Investigate `pad_vocab_embeddings()` and `core::from_vector()` in weight loading pipeline
