@@ -17,10 +17,45 @@ autograd::TensorPtr embedding_op(const autograd::TensorPtr& tensor, const autogr
     auto weight_tensor = weight->get_value();
     weight_tensor = ttnn::untilize(weight_tensor);
 
-    auto embeddings =
-        ttnn::embedding(tensor->get_value(), weight_tensor, /* pad_token */ std::nullopt, ttnn::Layout::TILE);
+    auto input_tensor = tensor->get_value();
+    auto input_shape = input_tensor.logical_shape();
+    auto batch_size = input_shape[0];
+
+    // WORKAROUND: ttnn::embedding has a batch processing bug for batch_size > 1
+    // where it returns incorrect embeddings for batches after the first one.
+    // Process each batch separately and concatenate the results.
+    // TODO: Remove this workaround once ttnn::embedding is fixed
+
+    ttnn::Tensor embeddings;
+
+    if (batch_size > 1) {
+        // Process each batch separately
+        std::vector<ttnn::Tensor> batch_embeddings;
+        batch_embeddings.reserve(batch_size);
+
+        for (uint32_t i = 0; i < batch_size; ++i) {
+            // Slice single batch: [batch, 1, 1, seq] -> [1, 1, 1, seq]
+            ttnn::SmallVector<uint32_t> start_indices = {i, 0, 0, 0};
+            ttnn::SmallVector<uint32_t> end_indices = {i + 1, input_shape[1], input_shape[2], input_shape[3]};
+            ttnn::SmallVector<uint32_t> stride = {1, 1, 1, 1};
+
+            auto batch_input = ttnn::slice(input_tensor, start_indices, end_indices, stride);
+
+            // Process this batch
+            auto batch_emb =
+                ttnn::embedding(batch_input, weight_tensor, /* pad_token */ std::nullopt, ttnn::Layout::TILE);
+            batch_embeddings.push_back(batch_emb);
+        }
+
+        // Concatenate along batch dimension
+        embeddings = ttnn::concat(batch_embeddings, /* dim */ 0);
+    } else {
+        // Single batch - use direct path
+        embeddings = ttnn::embedding(input_tensor, weight_tensor, /* pad_token */ std::nullopt, ttnn::Layout::TILE);
+    }
+
     auto embeddings_shape = embeddings.logical_shape();
-    auto batch_size = embeddings_shape[0];
+    batch_size = embeddings_shape[0];
     auto sentence_size = embeddings_shape[1];
     auto embedding_dim = embeddings_shape[2];
     embeddings = ttnn::reshape(embeddings, ttnn::Shape({batch_size, 1, sentence_size, embedding_dim}));
