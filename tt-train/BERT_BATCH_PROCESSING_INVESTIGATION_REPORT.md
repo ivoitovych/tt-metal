@@ -642,3 +642,38 @@ Build time: ~3 minutes (clean build)
 **Investigation Complete**: C++ regression tests prove core embedding operation works correctly
 **Root Cause**: Weight loading from safetensors (PCC=0.975456 with pre-trained weights, PCC=1.0 with random weights)
 **Next Step**: Investigate `pad_vocab_embeddings()` and `core::from_vector()` in weight loading pipeline
+
+---
+
+## 🚨 CRITICAL UPDATE - November 14, 2025 (Later)
+
+### Embedding Batch Bug: RESOLVED ✅
+
+The embedding batch processing bug has been **FIXED** with a workaround implemented in `embedding_op.cpp`:
+- **Fix**: Process each batch separately and concatenate results
+- **Status**: Embedding PCC improved from 0.608 to 0.999999 (perfect!)
+- **Validation**: All embedding tests now show PCC 1.0
+- **Documentation**: See `EMBEDDING_BATCH_BUG_FIX.md` for complete fix details
+
+### Attention Mechanism Bug: CRITICAL P0 BLOCKER 🔴
+
+Comprehensive layer-by-layer PCC analysis reveals the **true root cause** of error accumulation:
+
+**🎯 ROOT CAUSE IDENTIFIED**: Critical bug in **ATTENTION MECHANISM**, NOT embedding weights!
+
+**Key Findings**:
+- ✅ **Embeddings perfect** (PCC 1.0) - embedding bug fix confirmed working
+- 🔴 **Block 0 Attention shows immediate 3-6% error** (PCC 0.94-0.97)
+- 🔴 **Catastrophic degradation in Block 1 Attention** (bert-base: PCC 0.67)
+- 🔴 **bert-base completely broken by layer 6** (negative PCC values)
+
+**Impact**:
+- bert-tiny (2 layers): Marginally acceptable (final PCC 0.95)
+- bert-small (4 layers): Unusable (final PCC 0.67)
+- bert-base (12 layers): Completely broken (final PCC 0.04)
+
+**Conclusion**: The error accumulation observed in this report was **caused by attention mechanism bug**, not weight loading corruption. The embedding weight loading was actually correct - the attention mechanism introduces errors immediately in Block 0 that compound exponentially through subsequent layers.
+
+**Full Analysis**: See `BERT_ERROR_ACCUMULATION_INVESTIGATION.md` for complete layer-by-layer PCC analysis and root cause investigation.
+
+**Status**: 🚨 **P0 CRITICAL BLOCKER** - Requires immediate attention mechanism fix
