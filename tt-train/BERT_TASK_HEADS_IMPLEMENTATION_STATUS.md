@@ -326,12 +326,16 @@ All attention mechanism operations achieve PCC >0.99999:
 3. ❌ Matmul numerical precision: PCC >0.99999
 4. ❌ Softmax numerical stability: PCC >0.99999
 
-**Current Hypothesis**: LINEAR LAYER precision loss (HIGH PROBABILITY)
+**Current Hypothesis**: WEIGHT LOADING for linear layers (HIGH PROBABILITY)
 
-The PCC ~0.94 observed in "Block 0 Attention" includes more than just attention:
-1. QKV linear projection (`E → 3E`) before attention ← **SUSPECT**
-2. Attention operations (tested - perfect!) ✅
-3. Output linear projection (`E → E`) after attention ← **SUSPECT**
+Testing Results (November 14, 2025):
+1. QKV linear projection with random weights: PCC 0.99999607 ✅ **PERFECT**
+2. Attention operations: PCC >0.99999 ✅ **PERFECT**
+3. Output linear projection with random weights: PCC 0.99999636 ✅ **PERFECT**
+
+But "Block 0 Attention" with loaded HuggingFace weights: PCC 0.94 ❌ **FAILING**
+
+**Conclusion**: The bug is in WEIGHT LOADING, not the operations themselves!
 
 **Evidence**:
 - Embeddings perfect (PCC 1.0) proves embedding bug is fixed
@@ -588,7 +592,8 @@ All deviations are improvements or naming differences - no functional changes.
 1. **Attention Mechanism Bug** (P0 CRITICAL)
    - Status: Root cause investigation in progress
    - Impact: All models with > 2 layers unusable
-   - Location: Linear layers (QKV projection or output projection)
+   - Location: Weight loading for linear layers (QKV and output projections)
+   - Confirmed: All operations work perfectly with random weights (PCC >0.99999)
    - See: `BERT_BUG_INVESTIGATION_STATUS.md`
 
 ### Resolved Issues
@@ -644,12 +649,13 @@ All deviations are improvements or naming differences - no functional changes.
 
 **Current Investigation** (Updated November 14, 2025):
 
-Since all core attention operations achieve PCC >0.99999, the bug must be in LINEAR LAYERS:
+Since all operations achieve PCC >0.99999 with random weights, but fail with loaded weights, the bug must be in **WEIGHT LOADING**:
 
-1. Test QKV linear projection (`E → 3E`) in isolation
-2. Test output linear projection (`E → E`) in isolation
-3. Test Linear module operations with loaded weights
-4. Profile full multi-head attention to identify exact error source
+1. ✅ Tested QKV linear projection with random weights - PCC 0.99999607 (PASS)
+2. ✅ Tested output linear projection with random weights - PCC 0.99999636 (PASS)
+3. ⏳ Test linear layers with LOADED WEIGHTS from HuggingFace BERT
+4. ⏳ Investigate weight loading code for QKV and output projections
+5. ⏳ Check for weight transpose/layout issues during loading
 
 **See**: `BERT_BUG_INVESTIGATION_STATUS.md` for detailed plan and test results
 

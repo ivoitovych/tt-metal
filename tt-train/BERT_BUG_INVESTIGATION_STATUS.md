@@ -306,20 +306,54 @@ heads_fusion                    0.99999917   ✅ PASS
 2. Attention operations (tested - perfect!)
 3. Output linear projection (after attention) ← **SUSPECT**
 
-#### Current Hypothesis: Linear Layer Precision Loss
+#### Hypothesis 3: Linear Layer Operations Testing (TESTED - November 14, 2025)
 
-**Ranked Hypotheses**:
+**Test Method**: Test LinearLayer module with random weights in isolation
 
-1. **Linear Layer (QKV or Output Projection)** (HIGH PROBABILITY - NEW)
+**Test Created**:
+- `tests/python/test_linear_layer_debug.py` - Tests linear layers with various dimensions
+
+**Results**: ✅ **ALL LINEAR LAYER OPERATIONS ARE CORRECT**
+
+```
+Operation                        PCC          Status
+─────────────────────────────────────────────────────
+Basic Linear (8→16)             0.99999678   ✅ PASS
+Linear without bias (8→16)      0.99999577   ✅ PASS
+QKV projection (128→384)        0.99999607   ✅ PASS
+Output projection (128→128)     0.99999636   ✅ PASS
+BERT-base dimensions (768→2304) 0.99999571   ✅ PASS
+```
+
+**Conclusion**: ✅ **HYPOTHESES 1-5 REJECTED**
+- All linear layer operations achieve PCC >0.99999 with random weights
+- The LinearLayer module implementation is correct!
+
+**CRITICAL DISCOVERY**: The bug is NOT in:
+- ❌ Attention mechanism operations (tested - PCC >0.99999)
+- ❌ Linear layer operations with random weights (tested - PCC >0.99999)
+
+But "Block 0 Attention" still shows PCC 0.94 with loaded weights!
+
+#### Current Hypothesis: Weight Loading for Linear Layers
+
+**NEW PRIMARY HYPOTHESIS** (HIGH PROBABILITY):
+
+**Weight Loading Bug for Linear Layers**
    - **Evidence**:
-     - Attention operations achieve PCC >0.99999 (tested and verified)
-     - Block 0 Attention (including linear layers) shows PCC ~0.94
-     - Two linear layers surround the attention: QKV projection and output projection
-     - Each processes large matrices (E x 3E for QKV, E x E for output)
+     - Linear layers work perfectly with random weights (PCC >0.99999) ✅
+     - Block 0 Attention shows PCC ~0.94 with loaded HuggingFace weights ❌
+     - Similar pattern to embedding bug (required workaround for batch processing)
+     - Embeddings also had weight loading issues (now fixed)
+   - **Suspect Operations**:
+     - Weight loading for QKV linear projection (`E → 3E`)
+     - Weight loading for output linear projection (`E → E`)
    - **Location**:
-     - `sources/ttml/modules/multi_head_attention.cpp:15` (QKV linear)
-     - `sources/ttml/modules/multi_head_attention.cpp:17` (output linear)
-   - **Next Step**: Test linear layer operations in isolation
+     - `sources/ttml/models/bert.cpp` - Weight loading code
+     - QKV weight combination/loading process
+   - **Next Step**: Test linear layers with LOADED WEIGHTS from actual BERT model
+
+**Ranked Hypotheses** (All previous hypotheses REJECTED):
 
 2. **TTNN Transpose/Reshape Precision Loss** (REJECTED)
    - **Evidence**:
@@ -543,7 +577,8 @@ bert-base-uncased       26          1/26            -0.024465    0.999968     0.
 1. `tests/python/test_attention_scaling_order.py` - **REJECTED scaling order hypothesis**
 2. `tests/python/test_attention_operations_debug.py` - **VERIFIED core attention operations are correct**
 3. `tests/python/test_heads_operations.py` - **VERIFIED heads_creation and heads_fusion are correct**
-4. `tests/python/test_bert_layer_pcc_report.py` - Layer-by-layer PCC analysis
+4. `tests/python/test_linear_layer_debug.py` - **VERIFIED linear layer operations are correct (random weights)**
+5. `tests/python/test_bert_layer_pcc_report.py` - Layer-by-layer PCC analysis
 
 **Regression Tests**:
 1. `tests/ops/embedding_batch_regression_test.cpp` - 3 tests (all passing)
@@ -573,54 +608,48 @@ bert-base-uncased       26          1/26            -0.024465    0.999968     0.
 
 ## Next Steps
 
-### Priority 1: Test Linear Layer Operations (CRITICAL)
+### Priority 1: Test Linear Layers with Loaded Weights (CRITICAL)
 
-**Immediate Actions** (Updated November 14, 2025):
+**UPDATED** (November 14, 2025): Linear layers work perfectly with random weights!
 
-Since all core attention operations achieve PCC >0.99999, the bug must be in the LINEAR LAYERS:
+**Immediate Actions**:
 
-1. **Test QKV Linear Projection**
+Since all operations (attention, linear layers) work perfectly with random weights, but "Block 0 Attention" shows PCC 0.94 with loaded weights, the bug must be in **WEIGHT LOADING**:
+
+1. **Test QKV Linear Layer with Loaded BERT Weights**
    ```python
-   # Test the linear layer that projects embeddings to Q, K, V
-   # Location: sources/ttml/modules/multi_head_attention.cpp:15
-   input_tensor = create_test_tensor([B, 1, S, E])
+   # Load actual QKV weights from HuggingFace BERT model
+   bert_model = BertModel.from_pretrained("bert-base-uncased")
+   hf_qkv_weight = combine_qkv_weights(bert_model.encoder.layer[0].attention.self)
 
-   # TTML QKV projection (E -> 3E)
-   ttml_qkv = qkv_linear(input_tensor)
+   # Create TTML linear layer with loaded weights
+   ttml_linear = ttml.modules.LinearLayer(ttml_qkv_weight, ttml_qkv_bias)
 
-   # PyTorch reference
-   pt_qkv = F.linear(input_tensor, qkv_weight, qkv_bias)
-
-   pcc = compare(ttml_qkv, pt_qkv)
-   # Expected: If PCC < 0.95, this is the bug source!
-   ```
-
-2. **Test Output Linear Projection**
-   ```python
-   # Test the linear layer after attention
-   # Location: sources/ttml/modules/multi_head_attention.cpp:17
-   attention_output = create_test_tensor([B, 1, S, E])
-
-   # TTML output projection (E -> E)
-   ttml_output = out_linear(attention_output)
-
-   # PyTorch reference
-   pt_output = F.linear(attention_output, out_weight, out_bias)
+   # Test with same input
+   ttml_output = ttml_linear(input_tensor)
+   pt_output = F.linear(input_tensor, hf_qkv_weight, hf_qkv_bias)
 
    pcc = compare(ttml_output, pt_output)
-   # Expected: If PCC < 0.95, this is the bug source!
+   # Expected: If PCC < 0.95, weight loading/application is the bug!
    ```
 
-3. **Test Linear Layer in Isolation**
+2. **Test Output Linear Layer with Loaded BERT Weights**
    ```python
-   # Test if the Linear module itself has bugs
-   linear = ttml.modules.Linear(768, 2304)  # E -> 3E for QKV
+   # Load actual output projection weights from HuggingFace
+   hf_out_weight = bert_model.encoder.layer[0].attention.output.dense.weight
+   hf_out_bias = bert_model.encoder.layer[0].attention.output.dense.bias
 
-   input_tensor = create_test_tensor([B, 1, S, E])
-   ttml_output = linear(input_tensor)
-   pt_output = F.linear(input_tensor, linear.weight, linear.bias)
+   # Create TTML linear layer with loaded weights
+   ttml_linear = ttml.modules.LinearLayer(ttml_out_weight, ttml_out_bias)
 
    pcc = compare(ttml_output, pt_output)
+   ```
+
+3. **Investigate Weight Loading Code**
+   ```cpp
+   // Check how QKV weights are combined and loaded
+   // Location: sources/ttml/models/bert.cpp
+   // Look for potential issues in weight format, transpose, layout
    ```
 
 ### Priority 2: Profile Attention Step-by-Step
@@ -700,6 +729,7 @@ Since all core attention operations achieve PCC >0.99999, the bug must be in the
 - `tests/python/test_attention_scaling_order.py` - Scaling order hypothesis testing
 - `tests/python/test_attention_operations_debug.py` - Core attention operations validation
 - `tests/python/test_heads_operations.py` - Heads creation/fusion validation
+- `tests/python/test_linear_layer_debug.py` - Linear layer operations validation (random weights)
 - `tests/python/test_granular_embedding_debug.py` - Embedding decomposition
 - `tests/python/test_embedding_execution_trace.py` - Batch processing bug identification
 - `tests/python/test_bert_isolated_layer_validation.py` - Isolated layer validation
@@ -772,14 +802,14 @@ Since all core attention operations achieve PCC >0.99999, the bug must be in the
    - Result: PCC 1.0 (perfect)
 
 2. 🔴 **Attention Bug**: IN PROGRESS
-   - Root cause: **LINEAR LAYERS** (QKV projection or output projection)
+   - Root cause: **WEIGHT LOADING** for linear layers (suspected)
    - Impact: Immediate 3-6% error compounds exponentially
-   - Status: Core attention operations verified correct (PCC >0.99999)
-   - Rejected hypotheses: Scaling order, transpose/reshape, matmul, softmax
+   - Status: All operations verified correct with random weights (PCC >0.99999)
+   - Rejected hypotheses: Scaling order, transpose/reshape, matmul, softmax, linear layers (w/ random weights)
 
 **Production Status**: **NOT READY** - Attention bug must be resolved before deployment
 
-**Next Step**: Test linear layer operations (QKV projection and output projection) to identify the bug source.
+**Next Step**: Test linear layers with LOADED WEIGHTS from HuggingFace BERT model to confirm weight loading bug.
 
 ---
 
