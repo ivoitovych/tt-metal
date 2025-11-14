@@ -384,9 +384,9 @@ Failed test (unrelated to embedding fix):
 
 **Root Cause**: Small numerical errors in early layers amplify as they propagate through subsequent layers. With 12 layers, tiny per-layer errors multiply into significant final output errors.
 
-**Status**: ⚠️ **REQUIRES INVESTIGATION** - This is a separate issue from the embedding batch bug (which is fixed). The error accumulation problem needs systematic investigation to identify which operations or layers are introducing numerical errors that compound through the network.
+**Status**: 🚨 **CRITICAL BUG IDENTIFIED IN ATTENTION MECHANISM** - Layer-by-layer analysis completed (November 14, 2025). This is a separate issue from the embedding batch bug (which is fixed). The root cause has been identified as a fundamental bug in the attention mechanism causing immediate 3-6% error in Block 0 Attention and exponential degradation through subsequent layers.
 
-**Priority**: HIGH - While tests pass (threshold is PCC ≥ 0.95), production models require better numerical accuracy for reliable inference.
+**Priority**: P0 - CRITICAL BLOCKER - bert-base completely broken (final PCC 0.04), bert-small unusable (PCC 0.67). Detailed investigation report: `BERT_ERROR_ACCUMULATION_INVESTIGATION.md`
 
 **Test Files Created**:
 1. `tests/core/ttnn_embedding_batch_bug_test.cpp` (303 lines)

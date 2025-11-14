@@ -1,0 +1,557 @@
+2025-11-14 15:47:19.902 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+Config{cache_path=/root/.cache/ttnn,model_cache_path=/root/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-8.4.2, pluggy-1.6.0 -- /workspace/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.1.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /workspace/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, xdist-3.8.0, timeout-2.4.0, benchmark-5.1.0, anyio-4.11.0, dash-2.15.0, split-0.10.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+tests/python/test_bert_layer_pcc_report.py::test_bert_layer_pcc_report[1-32] BERT configuration:
+    Vocab size: 30522
+    Max sequence length: 32
+    Embedding dim: 128
+    Intermediate size: 512
+    Num heads: 2
+    Num blocks: 2
+    Dropout probability: 0
+    Layer norm epsilon: 1e-12
+    Use token type embeddings: true
+    Runner type: Default
+    Use pooler: false
+2025-11-14 15:47:21.826 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:203)
+2025-11-14 15:47:21.869 | info     |             UMD | Harvesting mask for chip 0 is 0x40 (NOC0: 0x40, simulated harvesting mask: 0x0). (cluster.cpp:394)
+2025-11-14 15:47:21.911 | info     |             UMD | Opening local chip ids/PCIe ids: {0}/[0] and remote chip ids {} (cluster.cpp:252)
+2025-11-14 15:47:21.911 | info     |             UMD | All devices in cluster running firmware version: 18.5.0 (cluster.cpp:232)
+2025-11-14 15:47:21.911 | info     |             UMD | IOMMU: disabled (cluster.cpp:174)
+2025-11-14 15:47:21.911 | info     |             UMD | KMD version: 2.2.0 (cluster.cpp:177)
+2025-11-14 15:47:21.911 | info     |             UMD | Software version 6.0.0, Ethernet FW version 6.15.0 (Device 0) (cluster.cpp:1086)
+2025-11-14 15:47:21.915 | info     |             UMD | Pinning pages for Hugepage: virtual address 0x741b00000000 and size 0x40000000 pinned to physical address 0x140000000 (pci_device.cpp:536)
+Loading BERT weights from safetensors file
+  Loaded embedding LayerNorm bias
+  Loaded embedding LayerNorm weight
+  Loaded position embeddings
+  Loaded token type embeddings
+  Loaded word embeddings
+  Loaded attention LayerNorm bias for layer 0
+  Loaded attention LayerNorm weight for layer 0
+  Loaded attention output bias for layer 0
+  Loaded attention output weight for layer 0
+  Cached K bias for layer 0
+  Cached K weight for layer 0
+  Cached Q bias for layer 0
+  Cached Q weight for layer 0
+  Cached V bias for layer 0
+  Cached V weight for layer 0
+  Loaded intermediate dense bias for layer 0
+  Loaded intermediate dense weight for layer 0
+  Loaded output LayerNorm bias for layer 0
+  Loaded output LayerNorm weight for layer 0
+  Loaded output dense bias for layer 0
+  Loaded output dense weight for layer 0
+  Loaded attention LayerNorm bias for layer 1
+  Loaded attention LayerNorm weight for layer 1
+  Loaded attention output bias for layer 1
+  Loaded attention output weight for layer 1
+  Cached K bias for layer 1
+  Cached K weight for layer 1
+  Cached Q bias for layer 1
+  Cached Q weight for layer 1
+  Cached V bias for layer 1
+  Cached V weight for layer 1
+  Loaded intermediate dense bias for layer 1
+  Loaded intermediate dense weight for layer 1
+  Loaded output LayerNorm bias for layer 1
+  Loaded output LayerNorm weight for layer 1
+  Loaded output dense bias for layer 1
+  Loaded output dense weight for layer 1
+
+Combining Q, K, V weights into QKV format...
+  ✓ Combined QKV for layer 0 ([128, 128] + [128, 128] + [128, 128] -> [384, 128])
+  ✓ Combined QKV for layer 1 ([128, 128] + [128, 128] + [128, 128] -> [384, 128])
+
+BERT weights loaded successfully from safetensors
+2025-11-14 15:47:30.599 | info     |            Test | Small moreh_layer_norm algorithm is selected. (moreh_layer_norm_program_factory.cpp:168)
+BERT configuration:
+    Vocab size: 30522
+    Max sequence length: 32
+    Embedding dim: 512
+    Intermediate size: 2048
+    Num heads: 8
+    Num blocks: 4
+    Dropout probability: 0
+    Layer norm epsilon: 1e-12
+    Use token type embeddings: true
+    Runner type: Default
+    Use pooler: false
+Loading BERT weights from safetensors file
+  Loaded embedding LayerNorm bias
+  Loaded embedding LayerNorm weight
+  Loaded position embeddings
+  Loaded token type embeddings
+  Loaded word embeddings
+  Loaded attention LayerNorm bias for layer 0
+  Loaded attention LayerNorm weight for layer 0
+  Loaded attention output bias for layer 0
+  Loaded attention output weight for layer 0
+  Cached K bias for layer 0
+  Cached K weight for layer 0
+  Cached Q bias for layer 0
+  Cached Q weight for layer 0
+  Cached V bias for layer 0
+  Cached V weight for layer 0
+  Loaded intermediate dense bias for layer 0
+  Loaded intermediate dense weight for layer 0
+  Loaded output LayerNorm bias for layer 0
+  Loaded output LayerNorm weight for layer 0
+  Loaded output dense bias for layer 0
+  Loaded output dense weight for layer 0
+  Loaded attention LayerNorm bias for layer 1
+  Loaded attention LayerNorm weight for layer 1
+  Loaded attention output bias for layer 1
+  Loaded attention output weight for layer 1
+  Cached K bias for layer 1
+  Cached K weight for layer 1
+  Cached Q bias for layer 1
+  Cached Q weight for layer 1
+  Cached V bias for layer 1
+  Cached V weight for layer 1
+  Loaded intermediate dense bias for layer 1
+  Loaded intermediate dense weight for layer 1
+  Loaded output LayerNorm bias for layer 1
+  Loaded output LayerNorm weight for layer 1
+  Loaded output dense bias for layer 1
+  Loaded output dense weight for layer 1
+  Loaded attention LayerNorm bias for layer 2
+  Loaded attention LayerNorm weight for layer 2
+  Loaded attention output bias for layer 2
+  Loaded attention output weight for layer 2
+  Cached K bias for layer 2
+  Cached K weight for layer 2
+  Cached Q bias for layer 2
+  Cached Q weight for layer 2
+  Cached V bias for layer 2
+  Cached V weight for layer 2
+  Loaded intermediate dense bias for layer 2
+  Loaded intermediate dense weight for layer 2
+  Loaded output LayerNorm bias for layer 2
+  Loaded output LayerNorm weight for layer 2
+  Loaded output dense bias for layer 2
+  Loaded output dense weight for layer 2
+  Loaded attention LayerNorm bias for layer 3
+  Loaded attention LayerNorm weight for layer 3
+  Loaded attention output bias for layer 3
+  Loaded attention output weight for layer 3
+  Cached K bias for layer 3
+  Cached K weight for layer 3
+  Cached Q bias for layer 3
+  Cached Q weight for layer 3
+  Cached V bias for layer 3
+  Cached V weight for layer 3
+  Loaded intermediate dense bias for layer 3
+  Loaded intermediate dense weight for layer 3
+  Loaded output LayerNorm bias for layer 3
+  Loaded output LayerNorm weight for layer 3
+  Loaded output dense bias for layer 3
+  Loaded output dense weight for layer 3
+
+Combining Q, K, V weights into QKV format...
+  ✓ Combined QKV for layer 0 ([512, 512] + [512, 512] + [512, 512] -> [1536, 512])
+  ✓ Combined QKV for layer 1 ([512, 512] + [512, 512] + [512, 512] -> [1536, 512])
+  ✓ Combined QKV for layer 2 ([512, 512] + [512, 512] + [512, 512] -> [1536, 512])
+  ✓ Combined QKV for layer 3 ([512, 512] + [512, 512] + [512, 512] -> [1536, 512])
+
+BERT weights loaded successfully from safetensors
+2025-11-14 15:47:43.724 | info     |            Test | Small moreh_layer_norm algorithm is selected. (moreh_layer_norm_program_factory.cpp:168)
+BERT configuration:
+    Vocab size: 30522
+    Max sequence length: 32
+    Embedding dim: 512
+    Intermediate size: 2048
+    Num heads: 8
+    Num blocks: 4
+    Dropout probability: 0
+    Layer norm epsilon: 1e-12
+    Use token type embeddings: true
+    Runner type: Default
+    Use pooler: false
+Loading BERT weights from safetensors file
+  Loaded embedding LayerNorm bias
+  Loaded embedding LayerNorm weight
+  Loaded position embeddings
+  Loaded token type embeddings
+  Loaded word embeddings
+  Loaded attention LayerNorm bias for layer 0
+  Loaded attention LayerNorm weight for layer 0
+  Loaded attention output bias for layer 0
+  Loaded attention output weight for layer 0
+  Cached K bias for layer 0
+  Cached K weight for layer 0
+  Cached Q bias for layer 0
+  Cached Q weight for layer 0
+  Cached V bias for layer 0
+  Cached V weight for layer 0
+  Loaded intermediate dense bias for layer 0
+  Loaded intermediate dense weight for layer 0
+  Loaded output LayerNorm bias for layer 0
+  Loaded output LayerNorm weight for layer 0
+  Loaded output dense bias for layer 0
+  Loaded output dense weight for layer 0
+  Loaded attention LayerNorm bias for layer 1
+  Loaded attention LayerNorm weight for layer 1
+  Loaded attention output bias for layer 1
+  Loaded attention output weight for layer 1
+  Cached K bias for layer 1
+  Cached K weight for layer 1
+  Cached Q bias for layer 1
+  Cached Q weight for layer 1
+  Cached V bias for layer 1
+  Cached V weight for layer 1
+  Loaded intermediate dense bias for layer 1
+  Loaded intermediate dense weight for layer 1
+  Loaded output LayerNorm bias for layer 1
+  Loaded output LayerNorm weight for layer 1
+  Loaded output dense bias for layer 1
+  Loaded output dense weight for layer 1
+  Loaded attention LayerNorm bias for layer 2
+  Loaded attention LayerNorm weight for layer 2
+  Loaded attention output bias for layer 2
+  Loaded attention output weight for layer 2
+  Cached K bias for layer 2
+  Cached K weight for layer 2
+  Cached Q bias for layer 2
+  Cached Q weight for layer 2
+  Cached V bias for layer 2
+  Cached V weight for layer 2
+  Loaded intermediate dense bias for layer 2
+  Loaded intermediate dense weight for layer 2
+  Loaded output LayerNorm bias for layer 2
+  Loaded output LayerNorm weight for layer 2
+  Loaded output dense bias for layer 2
+  Loaded output dense weight for layer 2
+  Loaded attention LayerNorm bias for layer 3
+  Loaded attention LayerNorm weight for layer 3
+  Loaded attention output bias for layer 3
+  Loaded attention output weight for layer 3
+  Cached K bias for layer 3
+  Cached K weight for layer 3
+  Cached Q bias for layer 3
+  Cached Q weight for layer 3
+  Cached V bias for layer 3
+  Cached V weight for layer 3
+  Loaded intermediate dense bias for layer 3
+  Loaded intermediate dense weight for layer 3
+  Loaded output LayerNorm bias for layer 3
+  Loaded output LayerNorm weight for layer 3
+  Loaded output dense bias for layer 3
+  Loaded output dense weight for layer 3
+
+Combining Q, K, V weights into QKV format...
+  ✓ Combined QKV for layer 0 ([512, 512] + [512, 512] + [512, 512] -> [1536, 512])
+  ✓ Combined QKV for layer 1 ([512, 512] + [512, 512] + [512, 512] -> [1536, 512])
+  ✓ Combined QKV for layer 2 ([512, 512] + [512, 512] + [512, 512] -> [1536, 512])
+  ✓ Combined QKV for layer 3 ([512, 512] + [512, 512] + [512, 512] -> [1536, 512])
+
+BERT weights loaded successfully from safetensors
+BERT configuration:
+    Vocab size: 30522
+    Max sequence length: 32
+    Embedding dim: 768
+    Intermediate size: 3072
+    Num heads: 12
+    Num blocks: 12
+    Dropout probability: 0
+    Layer norm epsilon: 1e-12
+    Use token type embeddings: true
+    Runner type: Default
+    Use pooler: false
+Loading BERT weights from safetensors file
+  Loaded embedding LayerNorm bias
+  Loaded embedding LayerNorm weight
+  Loaded position embeddings
+  Loaded token type embeddings
+  Loaded word embeddings
+  Loaded attention LayerNorm bias for layer 0
+  Loaded attention LayerNorm weight for layer 0
+  Loaded attention output bias for layer 0
+  Loaded attention output weight for layer 0
+  Cached K bias for layer 0
+  Cached K weight for layer 0
+  Cached Q bias for layer 0
+  Cached Q weight for layer 0
+  Cached V bias for layer 0
+  Cached V weight for layer 0
+  Loaded intermediate dense bias for layer 0
+  Loaded intermediate dense weight for layer 0
+  Loaded output LayerNorm bias for layer 0
+  Loaded output LayerNorm weight for layer 0
+  Loaded output dense bias for layer 0
+  Loaded output dense weight for layer 0
+  Loaded attention LayerNorm bias for layer 1
+  Loaded attention LayerNorm weight for layer 1
+  Loaded attention output bias for layer 1
+  Loaded attention output weight for layer 1
+  Cached K bias for layer 1
+  Cached K weight for layer 1
+  Cached Q bias for layer 1
+  Cached Q weight for layer 1
+  Cached V bias for layer 1
+  Cached V weight for layer 1
+  Loaded intermediate dense bias for layer 1
+  Loaded intermediate dense weight for layer 1
+  Loaded output LayerNorm bias for layer 1
+  Loaded output LayerNorm weight for layer 1
+  Loaded output dense bias for layer 1
+  Loaded output dense weight for layer 1
+  Loaded attention LayerNorm bias for layer 10
+  Loaded attention LayerNorm weight for layer 10
+  Loaded attention output bias for layer 10
+  Loaded attention output weight for layer 10
+  Cached K bias for layer 10
+  Cached K weight for layer 10
+  Cached Q bias for layer 10
+  Cached Q weight for layer 10
+  Cached V bias for layer 10
+  Cached V weight for layer 10
+  Loaded intermediate dense bias for layer 10
+  Loaded intermediate dense weight for layer 10
+  Loaded output LayerNorm bias for layer 10
+  Loaded output LayerNorm weight for layer 10
+  Loaded output dense bias for layer 10
+  Loaded output dense weight for layer 10
+  Loaded attention LayerNorm bias for layer 11
+  Loaded attention LayerNorm weight for layer 11
+  Loaded attention output bias for layer 11
+  Loaded attention output weight for layer 11
+  Cached K bias for layer 11
+  Cached K weight for layer 11
+  Cached Q bias for layer 11
+  Cached Q weight for layer 11
+  Cached V bias for layer 11
+  Cached V weight for layer 11
+  Loaded intermediate dense bias for layer 11
+  Loaded intermediate dense weight for layer 11
+  Loaded output LayerNorm bias for layer 11
+  Loaded output LayerNorm weight for layer 11
+  Loaded output dense bias for layer 11
+  Loaded output dense weight for layer 11
+  Loaded attention LayerNorm bias for layer 2
+  Loaded attention LayerNorm weight for layer 2
+  Loaded attention output bias for layer 2
+  Loaded attention output weight for layer 2
+  Cached K bias for layer 2
+  Cached K weight for layer 2
+  Cached Q bias for layer 2
+  Cached Q weight for layer 2
+  Cached V bias for layer 2
+  Cached V weight for layer 2
+  Loaded intermediate dense bias for layer 2
+  Loaded intermediate dense weight for layer 2
+  Loaded output LayerNorm bias for layer 2
+  Loaded output LayerNorm weight for layer 2
+  Loaded output dense bias for layer 2
+  Loaded output dense weight for layer 2
+  Loaded attention LayerNorm bias for layer 3
+  Loaded attention LayerNorm weight for layer 3
+  Loaded attention output bias for layer 3
+  Loaded attention output weight for layer 3
+  Cached K bias for layer 3
+  Cached K weight for layer 3
+  Cached Q bias for layer 3
+  Cached Q weight for layer 3
+  Cached V bias for layer 3
+  Cached V weight for layer 3
+  Loaded intermediate dense bias for layer 3
+  Loaded intermediate dense weight for layer 3
+  Loaded output LayerNorm bias for layer 3
+  Loaded output LayerNorm weight for layer 3
+  Loaded output dense bias for layer 3
+  Loaded output dense weight for layer 3
+  Loaded attention LayerNorm bias for layer 4
+  Loaded attention LayerNorm weight for layer 4
+  Loaded attention output bias for layer 4
+  Loaded attention output weight for layer 4
+  Cached K bias for layer 4
+  Cached K weight for layer 4
+  Cached Q bias for layer 4
+  Cached Q weight for layer 4
+  Cached V bias for layer 4
+  Cached V weight for layer 4
+  Loaded intermediate dense bias for layer 4
+  Loaded intermediate dense weight for layer 4
+  Loaded output LayerNorm bias for layer 4
+  Loaded output LayerNorm weight for layer 4
+  Loaded output dense bias for layer 4
+  Loaded output dense weight for layer 4
+  Loaded attention LayerNorm bias for layer 5
+  Loaded attention LayerNorm weight for layer 5
+  Loaded attention output bias for layer 5
+  Loaded attention output weight for layer 5
+  Cached K bias for layer 5
+  Cached K weight for layer 5
+  Cached Q bias for layer 5
+  Cached Q weight for layer 5
+  Cached V bias for layer 5
+  Cached V weight for layer 5
+  Loaded intermediate dense bias for layer 5
+  Loaded intermediate dense weight for layer 5
+  Loaded output LayerNorm bias for layer 5
+  Loaded output LayerNorm weight for layer 5
+  Loaded output dense bias for layer 5
+  Loaded output dense weight for layer 5
+  Loaded attention LayerNorm bias for layer 6
+  Loaded attention LayerNorm weight for layer 6
+  Loaded attention output bias for layer 6
+  Loaded attention output weight for layer 6
+  Cached K bias for layer 6
+  Cached K weight for layer 6
+  Cached Q bias for layer 6
+  Cached Q weight for layer 6
+  Cached V bias for layer 6
+  Cached V weight for layer 6
+  Loaded intermediate dense bias for layer 6
+  Loaded intermediate dense weight for layer 6
+  Loaded output LayerNorm bias for layer 6
+  Loaded output LayerNorm weight for layer 6
+  Loaded output dense bias for layer 6
+  Loaded output dense weight for layer 6
+  Loaded attention LayerNorm bias for layer 7
+  Loaded attention LayerNorm weight for layer 7
+  Loaded attention output bias for layer 7
+  Loaded attention output weight for layer 7
+  Cached K bias for layer 7
+  Cached K weight for layer 7
+  Cached Q bias for layer 7
+  Cached Q weight for layer 7
+  Cached V bias for layer 7
+  Cached V weight for layer 7
+  Loaded intermediate dense bias for layer 7
+  Loaded intermediate dense weight for layer 7
+  Loaded output LayerNorm bias for layer 7
+  Loaded output LayerNorm weight for layer 7
+  Loaded output dense bias for layer 7
+  Loaded output dense weight for layer 7
+  Loaded attention LayerNorm bias for layer 8
+  Loaded attention LayerNorm weight for layer 8
+  Loaded attention output bias for layer 8
+  Loaded attention output weight for layer 8
+  Cached K bias for layer 8
+  Cached K weight for layer 8
+  Cached Q bias for layer 8
+  Cached Q weight for layer 8
+  Cached V bias for layer 8
+  Cached V weight for layer 8
+  Loaded intermediate dense bias for layer 8
+  Loaded intermediate dense weight for layer 8
+  Loaded output LayerNorm bias for layer 8
+  Loaded output LayerNorm weight for layer 8
+  Loaded output dense bias for layer 8
+  Loaded output dense weight for layer 8
+  Loaded attention LayerNorm bias for layer 9
+  Loaded attention LayerNorm weight for layer 9
+  Loaded attention output bias for layer 9
+  Loaded attention output weight for layer 9
+  Cached K bias for layer 9
+  Cached K weight for layer 9
+  Cached Q bias for layer 9
+  Cached Q weight for layer 9
+  Cached V bias for layer 9
+  Cached V weight for layer 9
+  Loaded intermediate dense bias for layer 9
+  Loaded intermediate dense weight for layer 9
+  Loaded output LayerNorm bias for layer 9
+  Loaded output LayerNorm weight for layer 9
+  Loaded output dense bias for layer 9
+  Loaded output dense weight for layer 9
+
+Combining Q, K, V weights into QKV format...
+  ✓ Combined QKV for layer 0 ([768, 768] + [768, 768] + [768, 768] -> [2304, 768])
+  ✓ Combined QKV for layer 1 ([768, 768] + [768, 768] + [768, 768] -> [2304, 768])
+  ✓ Combined QKV for layer 2 ([768, 768] + [768, 768] + [768, 768] -> [2304, 768])
+  ✓ Combined QKV for layer 3 ([768, 768] + [768, 768] + [768, 768] -> [2304, 768])
+  ✓ Combined QKV for layer 4 ([768, 768] + [768, 768] + [768, 768] -> [2304, 768])
+  ✓ Combined QKV for layer 5 ([768, 768] + [768, 768] + [768, 768] -> [2304, 768])
+  ✓ Combined QKV for layer 6 ([768, 768] + [768, 768] + [768, 768] -> [2304, 768])
+  ✓ Combined QKV for layer 7 ([768, 768] + [768, 768] + [768, 768] -> [2304, 768])
+  ✓ Combined QKV for layer 8 ([768, 768] + [768, 768] + [768, 768] -> [2304, 768])
+  ✓ Combined QKV for layer 9 ([768, 768] + [768, 768] + [768, 768] -> [2304, 768])
+  ✓ Combined QKV for layer 10 ([768, 768] + [768, 768] + [768, 768] -> [2304, 768])
+  ✓ Combined QKV for layer 11 ([768, 768] + [768, 768] + [768, 768] -> [2304, 768])
+
+BERT weights loaded successfully from safetensors
+2025-11-14 15:48:01.495 | info     |            Test | Small moreh_layer_norm algorithm is selected. (moreh_layer_norm_program_factory.cpp:168)
+
+====================================================================================================
+BERT LAYER-BY-LAYER PCC REPORT
+====================================================================================================
+
+Comparing HuggingFace reference vs TTML implementation
+Note: Each layer receives output from previous TTML layer (cumulative errors)
+====================================================================================================
+
+Processing prajjwal1/bert-tiny...
+
+Processing prajjwal1/bert-small...
+
+Processing google/bert_uncased_L-4_H-512_A-8...
+
+Processing bert-base-uncased...
+
+====================================================================================================
+Layer                     bert-tiny     bert-smallbert_uncased_L-bert-base-uncas
+----------------------------------------------------------------------------------------------------
+Embeddings            ✅ 1.0000      ✅ 1.0000      ✅ 1.0000      ✅ 1.0000
+Block 0 Attn          ✅ 0.9714      ❌ 0.9496      ❌ 0.9496      ❌ 0.9423
+Block 0 Out           ✅ 0.9767      ✅ 0.9518      ✅ 0.9518      ❌ 0.9040
+Block 1 Attn          ❌ 0.9445      ❌ 0.9190      ❌ 0.9190      ❌ 0.6738
+Block 1 Out           ✅ 0.9537      ❌ 0.8600      ❌ 0.8600      ❌ 0.6171
+Final                 ✅ 0.9537      ❌ 0.8709      ❌ 0.8709      ❌ 0.5665
+Block 2 Out                          ❌ 0.8226      ❌ 0.8226      ❌ 0.4094
+Block 3 Attn                         ❌ 0.7448      ❌ 0.7448      ❌ 0.4415
+Block 3 Out                          ❌ 0.6733      ❌ 0.6733      ❌ 0.2926
+Final                                ❌ 0.6733      ❌ 0.6733      ❌ 0.3793
+Block 4 Out                                                        ❌ 0.2246
+Block 5 Attn                                                       ❌ 0.2280
+Block 5 Out                                                        ❌ 0.1229
+Block 6 Attn                                                       ❌ 0.0505
+Block 6 Out                                                        ❌ -0.0073
+Block 7 Attn                                                       ❌ 0.0824
+Block 7 Out                                                        ❌ -0.0245
+Block 8 Attn                                                       ❌ 0.1258
+Block 8 Out                                                        ❌ -0.0149
+Block 9 Attn                                                       ❌ 0.1929
+Block 9 Out                                                        ❌ 0.0621
+Block 10 Attn                                                      ❌ 0.2255
+Block 10 Out                                                       ❌ 0.0061
+Block 11 Attn                                                      ❌ 0.1084
+Block 11 Out                                                       ❌ 0.0418
+Final                                                              ❌ 0.0418
+====================================================================================================
+
+SUMMARY STATISTICS
+----------------------------------------------------------------------------------------------------
+Model                                    Layers     Pass/Total      Min PCC      Max PCC      Avg PCC
+----------------------------------------------------------------------------------------------------
+bert-tiny                                6          5/6             0.944546     0.999977     0.966675
+bert-small                               10         2/10            0.673295     0.999981     0.846537
+bert_uncased_L-4_H-512_A-8               10         2/10            0.673295     0.999981     0.846537
+bert-base-uncased                        26         1/26            -0.024465    0.999968     0.295873
+====================================================================================================
+
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /workspace/tt-metal/tt-train/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+45.47s call     tt-train/tests/python/test_bert_layer_pcc_report.py::test_bert_layer_pcc_report[1-32]
+0.00s setup    tt-train/tests/python/test_bert_layer_pcc_report.py::test_bert_layer_pcc_report[1-32]
+0.00s teardown tt-train/tests/python/test_bert_layer_pcc_report.py::test_bert_layer_pcc_report[1-32]
+=========================== short test summary info ============================
+PASSED tests/python/test_bert_layer_pcc_report.py::test_bert_layer_pcc_report[1-32]
+============================== 1 passed in 45.76s ==============================
+2025-11-14 15:48:06.525 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:419)
