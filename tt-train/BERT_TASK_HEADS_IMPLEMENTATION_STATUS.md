@@ -18,7 +18,7 @@ The BERT Task Heads implementation is **architecturally complete** but has a **c
 - ❌ **CASCADING FAILURE**: Error compounds exponentially through layers (PCC drops to 0.04 in bert-base)
 - ⚠️ **Test Coverage**: 140/140 C++ tests passing (structural), Python tests show attention accuracy issues
 
-**Root Cause**: Bug is NOT in high-level algorithm logic but in TTNN operation implementations (transpose/reshape/matmul). See `ATTENTION_MECHANISM_INVESTIGATION.md` for details.
+**Root Cause**: Bug is NOT in core attention operations (all achieve PCC >0.99999) but in LINEAR LAYERS (QKV projection or output projection). See `BERT_BUG_INVESTIGATION_STATUS.md` for details.
 
 ---
 
@@ -175,7 +175,7 @@ auto result = ttnn::concat(batch_outputs, 0);  // Concatenate results
 
 **Result**: Embeddings now achieve PCC 1.0 for all batch sizes ✅
 
-**See**: `EMBEDDING_BATCH_BUG_FIX.md`, `EMBEDDING_BATCH_BUG_ROOT_CAUSE.md`
+**See**: `BERT_BUG_INVESTIGATION_STATUS.md` for detailed root cause analysis
 
 ### Fix 3: Compilation Errors (8 issues) ✅
 
@@ -313,22 +313,33 @@ Final                 ❌ 0.0418     Unusable
 
 ### Root Cause Investigation Status
 
-**Hypothesis REJECTED**: Scaling order is NOT the root cause
-- Pre-scale: `(Q * scale) @ K^T` (current TTML)
-- Post-scale: `(Q @ K^T) * scale` (standard PyTorch)
-- **Both achieve PCC >0.9999 in PyTorch bfloat16** ✅
+**CRITICAL DISCOVERY** (November 14, 2025): Core attention operations are CORRECT!
 
-**Current Hypothesis**: TTNN operation precision loss (HIGH PROBABILITY)
-1. **Transpose/Reshape precision loss** - Multiple operations in head splitting
-2. **Matmul numerical precision** - Three matmuls per attention layer
-3. **Softmax numerical stability** - Delegates to TTNN primitive
+All attention mechanism operations achieve PCC >0.99999:
+- `heads_creation` (Q, K, V split): PCC 0.99999875-0.99999940 ✅
+- `scaled_dot_product_attention`: PCC 0.99999481 ✅
+- `heads_fusion`: PCC 0.99999917 ✅
+
+**Rejected Hypotheses**:
+1. ❌ Scaling order (pre-scale vs post-scale): Both achieve PCC >0.9999
+2. ❌ Transpose/reshape precision loss: PCC >0.99999
+3. ❌ Matmul numerical precision: PCC >0.99999
+4. ❌ Softmax numerical stability: PCC >0.99999
+
+**Current Hypothesis**: LINEAR LAYER precision loss (HIGH PROBABILITY)
+
+The PCC ~0.94 observed in "Block 0 Attention" includes more than just attention:
+1. QKV linear projection (`E → 3E`) before attention ← **SUSPECT**
+2. Attention operations (tested - perfect!) ✅
+3. Output linear projection (`E → E`) after attention ← **SUSPECT**
 
 **Evidence**:
 - Embeddings perfect (PCC 1.0) proves embedding bug is fixed
+- All core attention operations perfect (PCC >0.99999)
 - Error manifests IMMEDIATELY in Block 0 (not gradual accumulation)
-- Error scales with model size (more heads = worse error)
+- Bug must be in linear layers surrounding the attention mechanism
 
-**See**: `ATTENTION_MECHANISM_INVESTIGATION.md` for detailed analysis and next steps.
+**See**: `BERT_BUG_INVESTIGATION_STATUS.md` for detailed analysis and test results.
 
 ---
 
@@ -577,8 +588,8 @@ All deviations are improvements or naming differences - no functional changes.
 1. **Attention Mechanism Bug** (P0 CRITICAL)
    - Status: Root cause investigation in progress
    - Impact: All models with > 2 layers unusable
-   - Location: TTNN operations (transpose/reshape/matmul)
-   - See: `ATTENTION_MECHANISM_INVESTIGATION.md`
+   - Location: Linear layers (QKV projection or output projection)
+   - See: `BERT_BUG_INVESTIGATION_STATUS.md`
 
 ### Resolved Issues
 
@@ -586,7 +597,7 @@ All deviations are improvements or naming differences - no functional changes.
    - Root cause: TTNN embedding kernel batch processing bug
    - Fix: Workaround processes batches separately
    - Result: PCC 1.0 for all batch sizes
-   - See: `EMBEDDING_BATCH_BUG_FIX.md`
+   - See: `BERT_BUG_INVESTIGATION_STATUS.md`
 
 2. **PreTraining Dual Output Bug** ✅ FIXED
    - Root cause: Base BERT could only return single output
@@ -614,17 +625,16 @@ All deviations are improvements or naming differences - no functional changes.
 
 ## Related Documentation
 
-### Investigation Reports
-1. **`ATTENTION_MECHANISM_INVESTIGATION.md`** - Current investigation (attention bug)
-2. **`BERT_ERROR_ACCUMULATION_INVESTIGATION.md`** - Layer-by-layer PCC analysis
-3. **`EMBEDDING_BATCH_BUG_FIX.md`** - Embedding bug fix implementation
-4. **`EMBEDDING_BATCH_BUG_ROOT_CAUSE.md`** - Root cause analysis (TTNN kernel bug)
-5. **`BERT_BATCH_PROCESSING_INVESTIGATION_REPORT.md`** - Comprehensive batch processing investigation
-6. **`WEIGHT_LOADING_BUG_ANALYSIS.md`** - Historical context from previous branch
-7. **`WEIGHT_LOADING_FIX_STATUS.md`** - I64 dtype fix and weight verification
+### Bug Investigation
+- **`BERT_BUG_INVESTIGATION_STATUS.md`** - Consolidated bug investigation report
+  - Embedding batch processing bug (RESOLVED)
+  - Attention mechanism bug (IN PROGRESS - Linear layers suspected)
+  - Layer-by-layer PCC analysis
+  - All hypothesis testing and results
 
-### Design Documents
-1. **`TASK_HEADS_V2_DESIGN_DOCUMENT.md`** - Original design specification
+### Design & Implementation
+- **`TASK_HEADS_V2_DESIGN_DOCUMENT.md`** - Original design specification
+- **`BERT_LAYER_PCC_REPORT.txt`** - Raw test output from layer-by-layer validation
 
 ---
 
@@ -632,13 +642,16 @@ All deviations are improvements or naming differences - no functional changes.
 
 ### Priority 1: Fix Attention Mechanism Bug (CRITICAL)
 
-**Current Investigation**:
-1. Test TTNN transpose precision
-2. Test TTNN matmul precision
-3. Test TTNN reshape precision
-4. Profile attention step-by-step to identify exact error source
+**Current Investigation** (Updated November 14, 2025):
 
-**See**: `ATTENTION_MECHANISM_INVESTIGATION.md` for detailed plan
+Since all core attention operations achieve PCC >0.99999, the bug must be in LINEAR LAYERS:
+
+1. Test QKV linear projection (`E → 3E`) in isolation
+2. Test output linear projection (`E → E`) in isolation
+3. Test Linear module operations with loaded weights
+4. Profile full multi-head attention to identify exact error source
+
+**See**: `BERT_BUG_INVESTIGATION_STATUS.md` for detailed plan and test results
 
 ### Priority 2: Validate Fix
 
