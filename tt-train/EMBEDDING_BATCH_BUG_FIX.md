@@ -372,6 +372,22 @@ Successfully validated:
 Failed test (unrelated to embedding fix):
 - `test_bert_end_to_end_validation[1-16-prajjwal1/bert-tiny]`: ❌ Pre-existing limitation: "Max sequence length must be divisible by 32"
 
+⚠️ **Known Issue - Error Accumulation in Deep Models**:
+- bert-tiny (2 layers): PCC 0.998-0.999 ✅ Excellent
+- bert-small (4 layers): PCC ~0.93 ⚠️ Degraded
+- bert-base-uncased (12 layers): PCC ~0.81 ⚠️ Poor
+
+**Analysis**:
+- Individual operations: PCC > 0.999 ✅
+- Isolated layers: PCC > 0.999 ✅
+- End-to-end through multiple layers: Errors compound ❌
+
+**Root Cause**: Small numerical errors in early layers amplify as they propagate through subsequent layers. With 12 layers, tiny per-layer errors multiply into significant final output errors.
+
+**Status**: ⚠️ **REQUIRES INVESTIGATION** - This is a separate issue from the embedding batch bug (which is fixed). The error accumulation problem needs systematic investigation to identify which operations or layers are introducing numerical errors that compound through the network.
+
+**Priority**: HIGH - While tests pass (threshold is PCC ≥ 0.95), production models require better numerical accuracy for reliable inference.
+
 **Test Files Created**:
 1. `tests/core/ttnn_embedding_batch_bug_test.cpp` (303 lines)
    - Minimal standalone C++ reproduction for TTNN team
@@ -416,6 +432,47 @@ Failed test (unrelated to embedding fix):
    - Once TTNN is fixed, remove batch-by-batch processing
    - Verify performance returns to optimal
    - Update documentation
+
+### Critical - Error Accumulation Investigation
+
+⚠️ **REQUIRES IMMEDIATE ATTENTION**
+
+**Problem**: Deep models (4+ layers) show significant error accumulation:
+- bert-small (4 layers): PCC ~0.93
+- bert-base-uncased (12 layers): PCC ~0.81
+
+**Investigation Required**:
+
+1. **Layer-by-Layer Analysis**
+   - Run layer-by-layer validation to identify which layers introduce errors
+   - Measure PCC degradation at each layer boundary
+   - Create detailed error propagation report
+
+2. **Operation-Level Profiling**
+   - Identify which operations have highest numerical error
+   - Test LayerNorm, attention, FFN components in isolation
+   - Compare TTML vs PyTorch numerical precision for each operation
+
+3. **Data Type Investigation**
+   - Verify bfloat16 vs float32 conversion points
+   - Check for unnecessary precision loss during operations
+   - Test impact of using higher precision for accumulation
+
+4. **Potential Root Causes to Investigate**
+   - Attention softmax numerical stability
+   - LayerNorm epsilon and variance calculation
+   - Matrix multiplication accumulation precision
+   - Residual connection numerical errors
+   - Intermediate activation clamping/overflow
+
+5. **Test Strategy**
+   - Create isolated tests for each suspicious operation
+   - Build layer-by-layer error tracking framework
+   - Test with multiple model sizes to identify scaling patterns
+
+**Priority**: HIGH - Production models cannot ship with PCC < 0.90 for deep models
+
+**Status**: Not started - awaiting decision to begin investigation
 
 ---
 
