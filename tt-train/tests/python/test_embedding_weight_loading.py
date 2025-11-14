@@ -18,9 +18,10 @@ import torch
 import numpy as np
 from transformers import AutoModel
 
-# Import _ttml from PYTHONPATH (should be set to build/sources)
-# The module will be loaded from build/sources/ttml when run with proper PYTHONPATH
-import _ttml as ttml  # noqa: E402
+# Add build path to sys.path for ttml module
+sys.path.insert(0, "/workspace/tt-metal/tt-train/build/sources/ttml")
+
+import _ttml as ttml
 
 
 @pytest.fixture(scope="module")
@@ -75,14 +76,8 @@ def test_word_embedding_weights_match(hf_model, ttml_model):
 
     # Get TTML weights
     # The weights are stored in the model parameters
-    ttml_params = ttml_model.named_parameters()
-    ttml_weight_tensor = None
-    for name, param in ttml_params.items():
-        if "token_embeddings/weight" in name:
-            ttml_weight_tensor = param
-            break
-
-    assert ttml_weight_tensor is not None, "Could not find token_embeddings/weight in TTML model"
+    ttml_params = ttml_model.parameters()
+    ttml_weight_tensor = ttml_params["bert/token_embeddings/weight"]
 
     # Convert TTML tensor to numpy
     ttml_embeddings = ttml_weight_tensor.to_numpy()
@@ -195,11 +190,8 @@ def test_embedding_lookup_with_loaded_weights(hf_model, ttml_model):
     ttml_input = ttml.autograd.Tensor.from_numpy(input_ids_np)
 
     # Get just the word embeddings (not the full embedding layer)
-    ttml_params = ttml_model.named_parameters()
-    for name, param in ttml_params.items():
-        if "token_embeddings/weight" in name:
-            ttml_weight = param
-            break
+    ttml_params = ttml_model.parameters()
+    ttml_weight = ttml_params["bert/token_embeddings/weight"]
 
     # Perform embedding lookup
     ttml_output_tensor = ttml.ops.embedding(ttml_input, ttml_weight)

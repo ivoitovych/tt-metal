@@ -498,6 +498,12 @@ void load_model_from_safetensors(const std::filesystem::path& path, serializatio
     serialization::SafetensorSerialization::TensorCallback loading_callback =
         [&parameters, &get_parameter, &pad_vocab_embeddings, &qkv_caches](
             const serialization::SafetensorSerialization::TensorInfo& info, std::span<const std::byte> bytes) {
+            // Skip position_ids - it's a metadata tensor (not a learned parameter)
+            // We generate positions dynamically, so we don't need to load this
+            if (info.name == "bert.embeddings.position_ids" || info.name == "embeddings.position_ids") {
+                return true;  // Skip this tensor
+            }
+
             if (info.dtype != "F32") {
                 throw std::runtime_error(fmt::format("Unsupported dtype: {}", info.dtype));
             }
