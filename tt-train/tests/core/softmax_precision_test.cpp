@@ -150,6 +150,22 @@ std::vector<float> reference_softmax(const std::vector<float>& input, uint32_t s
 }  // namespace
 
 /**
+ * Test fixture for SoftmaxPrecisionBug tests.
+ * Properly manages device lifecycle to prevent breaking subsequent tests.
+ */
+class SoftmaxPrecisionBug : public ::testing::Test {
+protected:
+    void SetUp() override {
+        ttml::autograd::ctx().open_device();
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().reset_graph();
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+/**
  * Test that reproduces the softmax precision bug with bfloat16 accumulation.
  *
  * This test uses the EXACT data pattern from BERT that triggers the bug:
@@ -160,7 +176,7 @@ std::vector<float> reference_softmax(const std::vector<float>& input, uint32_t s
  * - With FP32 accumulation (fp32_dest_acc_en=true): PCC >0.999
  * - With bfloat16 accumulation (fp32_dest_acc_en=false): PCC ~0.81 (BUG!)
  */
-TEST(SoftmaxPrecisionBug, AttentionScorePattern) {
+TEST_F(SoftmaxPrecisionBug, AttentionScorePattern) {
     // BERT-like attention dimensions
     constexpr uint32_t batch_size = 1;
     constexpr uint32_t num_heads = 2;
@@ -331,7 +347,7 @@ TEST(SoftmaxPrecisionBug, AttentionScorePattern) {
  * achieve high precision (PCC >0.999), proving the bug is SPECIFIC to
  * softmax accumulation, not a general bfloat16 issue.
  */
-TEST(SoftmaxPrecisionBug, OtherBfloat16OpsWorkCorrectly) {
+TEST_F(SoftmaxPrecisionBug, OtherBfloat16OpsWorkCorrectly) {
     fmt::print("\n");
     fmt::print("================================================================================\n");
     fmt::print("SANITY CHECK: Other bfloat16 operations\n");
@@ -393,7 +409,7 @@ TEST(SoftmaxPrecisionBug, OtherBfloat16OpsWorkCorrectly) {
  * This uses real attention scores from a BERT forward pass that showed PCC 0.81
  * in the Python test, proving the bug is data-dependent.
  */
-TEST(SoftmaxPrecisionBug, RealBertAttentionScores) {
+TEST_F(SoftmaxPrecisionBug, RealBertAttentionScores) {
     fmt::print("\n");
     fmt::print("================================================================================\n");
     fmt::print("SOFTMAX BUG WITH REAL BERT DATA\n");
