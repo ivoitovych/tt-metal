@@ -49,6 +49,8 @@ This proved the bug is NOT in individual operations but in their **integrated ex
 
 Executed attention operations step-by-step with loaded BERT weights and real data:
 
+**Test**: `test_attention_step_by_step.py`
+
 ```
 STEP 1: QKV Projection
   PCC: 0.99999589 ✅
@@ -130,45 +132,67 @@ Output Range Comparison:
 
 ---
 
-## Debugging Notes
+## Root Cause Analysis Deep Dive
+
+### The Bug Characteristics
+
+**Symptom**: Output values are systematically **smaller in magnitude** than expected:
+- Expected (PyTorch): `[-2.096, 2.166]`
+- Actual (TTML): `[-1.578, 1.805]`
+- Pattern: Values are compressed toward zero
+
+**Data Dependency**:
+- Random test data: PCC >0.99999 (works perfectly)
+- BERT forward pass data: PCC 0.81 (catastrophic failure)
+- This indicates the bug is triggered by specific data patterns or value ranges
 
 ### Possible Root Causes in SDPA
 
-1. **Value clipping/clamping**:
-   - Output range [-1.6, 1.8] suggests values are being clipped
-   - Might be bfloat16 overflow/underflow
-   - Or explicit clamping in the kernel
+Based on the evidence, the most likely causes are:
+
+1. **Numerical precision loss in matrix operations** (MOST LIKELY):
+   - Q @ K^T matmul might lose precision with BERT data patterns
+   - Attention scores in BERT have specific distributions
+   - Could be accumulation errors in bfloat16
 
 2. **Softmax numerical instability**:
-   - Real BERT attention scores have specific patterns
-   - Numerical precision issues in softmax with bfloat16?
+   - Large attention scores could cause overflow/underflow
+   - Softmax computation might not be numerically stable for BERT ranges
 
-3. **Attention mask handling**:
-   - Real BERT uses attention masks
-   - Mask application might be incorrect for certain patterns
+3. **Data type conversions**:
+   - Implicit float32 ↔ bfloat16 conversions
+   - Precision loss during tensor operations
 
-4. **Matrix multiplication precision**:
-   - Q @ K^T might accumulate errors differently with real data
-   - Scaling by 1/sqrt(head_dim) might compound precision issues
+4. **Attention mask handling**:
+   - Mask application might interact poorly with certain data patterns
+   - Though tests used zero masks (no masking)
 
-### Next Steps for Fix
+### Next Steps to Fix
 
-1. **Examine `scaled_dot_product_attention.cpp`**:
-   - Look for explicit value clamping
-   - Check bfloat16 conversion points
-   - Verify softmax implementation
+**Immediate Actions**:
 
-2. **Add detailed logging**:
-   - Log intermediate values (attention scores, softmax output)
-   - Compare with HuggingFace at each sub-step
+1. **Add intermediate value logging to SDPA**:
+   - Log Q @ K^T scores before softmax
+   - Log softmax outputs
+   - Log final attention @ V values
+   - Compare each with HuggingFace
 
-3. **Test with different data ranges**:
-   - Scale input to match random test data
-   - See if bug disappears (confirms magnitude-dependent bug)
+2. **Test with forced float32**:
+   - Temporarily disable bfloat16 in SDPA operations
+   - If PCC improves, confirms precision issue
 
-4. **Check TTNN kernel**:
-   - The bug might be in the underlying TTNN operation
-   - Test with pure PyTorch in bfloat16
+3. **Analyze BERT data patterns**:
+   - Profile actual Q, K, V value distributions
+   - Check if certain ranges trigger the bug
+
+4. **Review TTNN matmul kernel**:
+   - The bug might be in underlying TTNN operations
+   - Check if matmul has known precision issues
+
+**Code Locations to Investigate**:
+- `/workspace/tt-metal/tt-train/sources/ttml/ops/scaled_dot_product_attention.cpp` (lines 139-244)
+- `/workspace/tt-metal/tt-train/sources/ttml/metal/ops/softmax/` (softmax kernel)
+- `/workspace/tt-metal/tt-train/sources/ttml/ttnn_fixed/matmuls.hpp` (matmul operations)
 
 ---
 

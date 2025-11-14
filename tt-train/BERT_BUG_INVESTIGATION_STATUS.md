@@ -294,12 +294,58 @@ scaled_dot_product_attention    0.99999481   ✅ PASS
 heads_fusion                    0.99999917   ✅ PASS
 ```
 
-**Conclusion**: ✅ **HYPOTHESES 1-4 REJECTED**
-- All core attention operations achieve PCC >0.99999
+**Conclusion**: ✅ **HYPOTHESIS 2 REJECTED (with random data)**
+- All core attention operations achieve PCC >0.99999 with random test data
 - Transpose/reshape operations are correct
-- Matmul operations are correct
-- Softmax is correct
-- The bug is NOT in the attention mechanism itself!
+- **BUT**: This doesn't test with real BERT forward pass data!
+
+#### Hypothesis 3: Root Cause Identified - SDPA with Real BERT Data (CONFIRMED - November 14, 2025)
+
+**Critical Discovery**: The bug is **DATA-DEPENDENT** - it only appears with real BERT forward pass data, not synthetic test data!
+
+**Test Method**: Systematic testing of every operation with loaded BERT weights and real forward pass data
+
+**Tests Created**:
+- `test_linear_layer_loaded_weights.py` - Tests linear layers with loaded BERT weights
+- `test_residual_connection_debug.py` - Tests ADD operations
+- `test_layernorm_debug.py` - Tests LayerNorm with BERT epsilon
+- `test_multihead_attention_loaded_weights.py` - Full attention flow (REPRODUCED BUG!)
+- `test_attention_step_by_step.py` - Step-by-step debugging (PINPOINTED BUG!)
+
+**Results Summary**:
+
+| Component | Random Data PCC | BERT Data PCC | Status |
+|-----------|----------------|---------------|--------|
+| QKV Linear | 0.99999607 | 0.99999589 | ✅ PASS |
+| Output Linear | 0.99999636 | 0.99999553 | ✅ PASS |
+| ADD Operation | 0.99999774 | 0.99999774 | ✅ PASS |
+| LayerNorm | 0.99999434 | 0.99999434 | ✅ PASS |
+| **SDPA (complete)** | **>0.99999** | **0.81395644** | ❌ **BUG!** |
+
+**Step-by-Step Results with BERT Data**:
+```
+Step 1: QKV Projection    PCC = 0.99999589 ✅
+Step 2: Heads Creation    PCC = 0.99999595 ✅
+Step 3: SDPA              PCC = 0.81395644 ❌ ← BUG HERE!
+  Expected range: [-2.096, 2.166]
+  Actual range:   [-1.578, 1.805]  ← Values compressed!
+```
+
+**Root Cause**: `scaled_dot_product_attention` fails when processing real BERT data patterns
+
+**Evidence**:
+- Output values are systematically **smaller in magnitude** than expected
+- Pattern suggests numerical precision loss or value saturation
+- Bug invisible to random data tests - only triggered by BERT forward pass patterns
+
+**Likely Causes**:
+1. Numerical precision loss in Q @ K^T matmul with bfloat16
+2. Softmax numerical instability with BERT attention score distributions
+3. Data type conversions losing precision
+
+**See**: `BUG_ROOT_CAUSE_FOUND.md` for complete analysis
+
+**Status**: 🎯 **ROOT CAUSE IDENTIFIED** - Ready for fix implementation
 
 **Critical Finding**: The PCC ~0.94 observed in "Block 0 Attention" includes operations beyond just attention:
 1. QKV linear projection (before attention) ← **SUSPECT**
