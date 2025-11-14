@@ -177,6 +177,52 @@ autograd::TensorPtr Bert::get_embeddings(
     return embeddings;
 }
 
+Bert::EmbeddingIntermediates Bert::get_embeddings_with_intermediates(
+    const autograd::TensorPtr& input_ids, const autograd::TensorPtr& token_type_ids) {
+    EmbeddingIntermediates intermediates;
+
+    // Validate input shapes
+    auto input_shape = input_ids->get_shape();
+
+    // 1. Word embeddings (token lookup)
+    intermediates.word_embeddings = (*m_token_embeddings)(input_ids);
+
+    // 2. After adding positional embeddings
+    // Note: m_position_embeddings operator() adds positions internally
+    intermediates.after_position = (*m_position_embeddings)(intermediates.word_embeddings);
+
+    // 3. Token type embeddings and sum
+    if (m_token_type_embeddings && token_type_ids) {
+        // Validate token_type_ids shape matches input_ids
+        auto type_shape = token_type_ids->get_shape();
+        if (type_shape != input_shape) {
+            throw std::logic_error(fmt::format(
+                "token_type_ids shape must match input_ids shape. "
+                "input_ids shape={}, token_type_ids shape={}",
+                input_shape,
+                type_shape));
+        }
+
+        // Get token type embeddings alone
+        intermediates.token_type_embeddings = (*m_token_type_embeddings)(token_type_ids);
+
+        // Add to position embeddings
+        intermediates.after_token_type = ops::add(intermediates.after_position, intermediates.token_type_embeddings);
+    } else {
+        // No token type embeddings
+        intermediates.token_type_embeddings = nullptr;
+        intermediates.after_token_type = intermediates.after_position;
+    }
+
+    // 4. After LayerNorm
+    intermediates.after_layer_norm = (*m_embedding_norm)(intermediates.after_token_type);
+
+    // 5. After dropout (final embeddings)
+    intermediates.after_dropout = (*m_embedding_dropout)(intermediates.after_layer_norm);
+
+    return intermediates;
+}
+
 autograd::TensorPtr Bert::process_attention_mask(const autograd::TensorPtr& attention_mask) const {
     if (!attention_mask) {
         return nullptr;
@@ -333,9 +379,10 @@ Bert::IntermediateOutputs Bert::forward_with_intermediates(
     // Process attention mask
     auto processed_mask = process_attention_mask(attention_mask);
 
-    // Get input embeddings and store
-    auto hidden_states = get_embeddings(input_ids, token_type_ids);
-    outputs.embeddings = hidden_states;
+    // Get input embeddings with granular intermediates and store
+    outputs.embedding_intermediates = get_embeddings_with_intermediates(input_ids, token_type_ids);
+    auto hidden_states = outputs.embedding_intermediates.after_dropout;  // Use final embedding output
+    outputs.embeddings = hidden_states;                                  // Backward compatibility
 
     // Pass through transformer blocks and capture intermediates
     outputs.block_attention_outputs.reserve(m_blocks.size());

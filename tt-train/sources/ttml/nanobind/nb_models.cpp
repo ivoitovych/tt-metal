@@ -181,6 +181,10 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
             .def(nb::init<>())
             .def_rw("embeddings", &models::bert::Bert::IntermediateOutputs::embeddings, "Embedding layer output")
             .def_rw(
+                "embedding_intermediates",
+                &models::bert::Bert::IntermediateOutputs::embedding_intermediates,
+                "Granular embedding breakdown")
+            .def_rw(
                 "block_attention_outputs",
                 &models::bert::Bert::IntermediateOutputs::block_attention_outputs,
                 "Attention outputs from each block")
@@ -190,6 +194,32 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
                 "Final output from each block")
             .def_rw("final_output", &models::bert::Bert::IntermediateOutputs::final_output, "Final model output");
 
+        // Bind EmbeddingIntermediates structure for granular embedding debugging
+        nb::class_<models::bert::Bert::EmbeddingIntermediates>(py_bert_module, "EmbeddingIntermediates")
+            .def(nb::init<>())
+            .def_rw(
+                "word_embeddings",
+                &models::bert::Bert::EmbeddingIntermediates::word_embeddings,
+                "Word (token) embeddings after lookup")
+            .def_rw(
+                "after_position",
+                &models::bert::Bert::EmbeddingIntermediates::after_position,
+                "After adding positional embeddings")
+            .def_rw(
+                "token_type_embeddings",
+                &models::bert::Bert::EmbeddingIntermediates::token_type_embeddings,
+                "Token type embeddings (if used)")
+            .def_rw(
+                "after_token_type",
+                &models::bert::Bert::EmbeddingIntermediates::after_token_type,
+                "After adding token type embeddings")
+            .def_rw(
+                "after_layer_norm", &models::bert::Bert::EmbeddingIntermediates::after_layer_norm, "After LayerNorm")
+            .def_rw(
+                "after_dropout",
+                &models::bert::Bert::EmbeddingIntermediates::after_dropout,
+                "Final embeddings (after dropout)");
+
         // Add forward_with_intermediates for layer-by-layer debugging
         py_bert.def(
             "forward_with_intermediates",
@@ -198,6 +228,14 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
             nb::arg("attention_mask") = nullptr,
             nb::arg("token_type_ids") = nullptr,
             "BERT forward pass that returns all intermediate layer outputs for debugging");
+
+        // Add get_embeddings_with_intermediates for granular embedding debugging
+        py_bert.def(
+            "get_embeddings_with_intermediates",
+            &models::bert::Bert::get_embeddings_with_intermediates,
+            nb::arg("input_ids"),
+            nb::arg("token_type_ids") = nullptr,
+            "Get embeddings with all intermediate tensors for granular debugging");
 
         // Add methods for isolated layer testing
         py_bert.def(

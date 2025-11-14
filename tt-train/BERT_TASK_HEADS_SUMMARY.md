@@ -155,9 +155,12 @@ Comprehensive investigation revealed **severe accuracy issues**:
 While individual operations pass tests, the **end-to-end model fails to meet accuracy requirements**:
 - Expected: PCC > 0.999 for reference implementations
 - Actual: PCC = 0.932-0.998 depending on configuration
-- Root cause: Numerical precision errors compound through layers
+- **Root cause IDENTIFIED**: Word embedding lookup (`ops::embedding_op`) introduces error immediately (PCC=0.975456)
+  - Token type embeddings work perfectly (PCC=0.999999), proving the operation itself is correct
+  - Issue is specific to word embedding table access pattern with batch_size > 1
+  - See BERT_BATCH_PROCESSING_INVESTIGATION_REPORT.md for detailed analysis
 
-**This IS a blocker for production use.** The implementation cannot be used as a reference until accuracy meets standards (PCC > 0.999 consistently).
+**This IS a blocker for production use.** The implementation cannot be used as a reference until the word embedding lookup bug is fixed and accuracy meets standards (PCC > 0.999 consistently).
 
 ---
 
@@ -165,10 +168,11 @@ While individual operations pass tests, the **end-to-end model fails to meet acc
 
 ### Non-Critical Issues
 
-1. **Batch Processing Error Accumulation**
-   - Status: Identified, root cause under investigation
-   - Impact: batch_size=1 works excellently, batch_size=2 shows degradation
-   - Workaround: Use batch_size=1 for highest accuracy
+1. **Word Embedding Lookup Bug** (ROOT CAUSE IDENTIFIED)
+   - Status: Root cause identified in `ops::embedding_op` (PCC=0.975456 for word embeddings)
+   - Impact: Affects all batch sizes (batch_size=1: PCC≈0.998, batch_size=2: PCC≈0.932-0.970)
+   - Location: `sources/ttml/ops/embedding_op.cpp` or `sources/ttml/modules/embedding_module.cpp`
+   - Note: Token type embeddings work perfectly (PCC=0.999999), proving operation is fundamentally sound
 
 2. **Sequence Length Hardware Constraint**
    - Requirement: seq_len must be divisible by 32
@@ -312,11 +316,11 @@ The BERT Task Heads implementation is **architecturally complete but NOT product
 **Recommendation**: **DO NOT USE FOR PRODUCTION**
 
 **Required Actions Before Production Use**:
-1. **CRITICAL**: Fix error accumulation issue causing PCC degradation
-2. **CRITICAL**: Achieve PCC > 0.999 for all end-to-end tests
-3. **CRITICAL**: Fix batch processing accuracy (currently fails with batch_size > 1)
-4. Validate against HuggingFace with PCC > 0.999
-5. Document root cause and fixes
+1. **CRITICAL**: Fix word embedding lookup bug in `ops::embedding_op` (root cause: PCC=0.975456)
+2. **CRITICAL**: Achieve PCC > 0.999 for word embeddings (currently 0.975456)
+3. **CRITICAL**: Validate end-to-end execution meets PCC > 0.999 for all batch sizes
+4. Validate all task heads against HuggingFace with PCC > 0.999
+5. Run full test suite to confirm accuracy fix resolved all issues
 
 **Current Value**:
 - Code architecture and patterns can serve as structural reference

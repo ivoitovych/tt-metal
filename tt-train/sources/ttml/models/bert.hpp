@@ -101,9 +101,21 @@ public:
         return m_pooler != nullptr;
     }
 
+    // Granular embedding intermediate outputs for debugging/validation
+    // Purpose: Identify which specific embedding component introduces error
+    struct EmbeddingIntermediates {
+        autograd::TensorPtr word_embeddings;        // After token embedding lookup
+        autograd::TensorPtr after_position;         // After adding position embeddings
+        autograd::TensorPtr token_type_embeddings;  // Token type embedding lookup (if used)
+        autograd::TensorPtr after_token_type;       // After adding token type (if used)
+        autograd::TensorPtr after_layer_norm;       // After LayerNorm
+        autograd::TensorPtr after_dropout;          // Final embeddings (after dropout)
+    };
+
     // Intermediate outputs structure for layer-by-layer debugging
     struct IntermediateOutputs {
-        autograd::TensorPtr embeddings;                            // After embedding layer
+        autograd::TensorPtr embeddings;                            // After embedding layer (final)
+        EmbeddingIntermediates embedding_intermediates;            // Granular embedding breakdown
         std::vector<autograd::TensorPtr> block_attention_outputs;  // After each block's attention
         std::vector<autograd::TensorPtr> block_outputs;            // After each complete block
         autograd::TensorPtr final_output;                          // Final model output
@@ -117,6 +129,10 @@ public:
 
     // Public accessors for isolated layer testing
     [[nodiscard]] autograd::TensorPtr get_embeddings(
+        const autograd::TensorPtr& input_ids, const autograd::TensorPtr& token_type_ids = nullptr);
+
+    // Get embeddings with all intermediate tensors for granular debugging
+    [[nodiscard]] EmbeddingIntermediates get_embeddings_with_intermediates(
         const autograd::TensorPtr& input_ids, const autograd::TensorPtr& token_type_ids = nullptr);
 
     [[nodiscard]] const std::vector<std::shared_ptr<modules::BertBlock>>& get_blocks() const {

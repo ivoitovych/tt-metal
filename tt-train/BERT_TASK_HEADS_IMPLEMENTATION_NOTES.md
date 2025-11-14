@@ -88,16 +88,26 @@ Based on comprehensive testing against HuggingFace BERT implementations:
 
 ### 2.3 Acceptable Test Outcomes
 
+**IMPORTANT**: These thresholds are **OUTDATED** as of 2025-11-14.
+**Root cause analysis revealed that PCC standards must be stricter for reference implementations.**
+
+**Updated Standard (Post Root Cause Analysis)**:
 | PCC Range | Status | Action |
 |-----------|--------|--------|
-| > 0.95 | ✅ PASS | No action needed - excellent match |
-| 0.90-0.95 | ⚠️ ACCEPTABLE | Document as known difference for complex models |
-| < 0.90 | ❌ FAIL | Investigate - likely bug or incorrect implementation |
+| > 0.999 | ✅ PASS | Acceptable for reference implementation |
+| 0.995-0.999 | ⚠️ INVESTIGATE | May indicate subtle bug - investigate thoroughly |
+| < 0.995 | ❌ FAIL | Bug or incorrect implementation - must fix |
+
+**Previous (Incorrect) Thresholds**:
+~~> 0.95 = PASS~~ ← **TOO LENIENT**
+~~0.90-0.95 = ACCEPTABLE~~ ← **TOO LENIENT**
+
+**Why standards changed**: Granular decomposition testing (2025-11-14) revealed that PCC=0.975456 (word embeddings) indicates a **real bug** in `ops::embedding_op`, not acceptable variation. Reference implementations must achieve PCC > 0.999.
 
 **Additional Checks**:
 - No NaN or Inf values
 - Correct output shapes
-- Reasonable mean absolute error (< 0.5 for bert-base)
+- PCC > 0.999 for all intermediate stages (embeddings, each layer, final output)
 
 ---
 
