@@ -34,12 +34,12 @@ tt::tt_metal::Tensor log_softmax(const tt::tt_metal::Tensor& t, int dim) {
 
 // Stable softmax implementation
 // ttnn::softmax also exists, but it is not stable (even after max subtraction optimization)
-tt::tt_metal::Tensor softmax(const tt::tt_metal::Tensor& t, int dim) {
+tt::tt_metal::Tensor softmax(const tt::tt_metal::Tensor& t, int dim, bool use_fp32_accumulation_workaround) {
     return ttnn::softmax(
         t,
         /* dim */ dim,
         /*memory_config */ std::nullopt,
-        ttml::core::ComputeKernelConfig::softmax(),
+        ttml::core::ComputeKernelConfig::softmax(use_fp32_accumulation_workaround),
         /*stable*/ true);
 }
 

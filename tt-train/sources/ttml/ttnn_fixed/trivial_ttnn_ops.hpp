@@ -12,7 +12,7 @@ namespace ttml::ttnn_fixed {
 tt::tt_metal::Tensor sum_over_dim(const tt::tt_metal::Tensor& t, uint32_t dim);
 tt::tt_metal::Tensor sum_over_batch(const tt::tt_metal::Tensor& t);
 tt::tt_metal::Tensor log_softmax(const tt::tt_metal::Tensor& t, int dim);
-tt::tt_metal::Tensor softmax(const tt::tt_metal::Tensor& t, int dim);
+tt::tt_metal::Tensor softmax(const tt::tt_metal::Tensor& t, int dim, bool use_fp32_accumulation_workaround = true);
 tt::tt_metal::Tensor divide(const tt::tt_metal::Tensor& a, const tt::tt_metal::Tensor& b);
 
 tt::tt_metal::Tensor mean_moreh(const tt::tt_metal::Tensor& t, int dim, bool keep_dim);

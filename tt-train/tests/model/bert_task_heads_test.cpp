@@ -36,7 +36,7 @@ namespace {
 /**
  * Helper function to compute Pearson Correlation Coefficient
  */
-float compute_pcc(const std::vector<float>& a, const std::vector<float>& b) {
+[[maybe_unused]] float compute_pcc(const std::vector<float>& a, const std::vector<float>& b) {
     if (a.size() != b.size()) {
         return 0.0F;
     }

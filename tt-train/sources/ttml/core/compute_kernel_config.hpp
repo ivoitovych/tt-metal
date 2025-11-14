@@ -11,7 +11,7 @@ namespace ttml::core {
 class ComputeKernelConfig {
 public:
     static ttnn::WormholeComputeKernelConfig precise();
-    static ttnn::WormholeComputeKernelConfig softmax();
+    static ttnn::WormholeComputeKernelConfig softmax(bool use_fp32_accumulation_workaround = true);
     static ttnn::WormholeComputeKernelConfig matmul();
     static ttnn::WormholeComputeKernelConfig fast();
 };

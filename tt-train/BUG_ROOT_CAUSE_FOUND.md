@@ -240,11 +240,49 @@ All test files are reusable and documented:
 
 After systematic elimination of all other possibilities, the root cause is definitively:
 
-**`scaled_dot_product_attention` fails to correctly process real BERT attention patterns.**
+**SOFTMAX with bfloat16 accumulation loses precision on BERT attention score patterns.**
 
-The operation works perfectly with random test data but produces catastrophically wrong results (PCC 0.81, wrong output range) when processing actual BERT embeddings with loaded weights.
+### Root Cause Details (November 14, 2025)
 
-**Next Action**: Fix `scaled_dot_product_attention.cpp` to handle real BERT data patterns correctly.
+Through sub-operation analysis, the bug was isolated to the **softmax operation within SDPA**:
+
+**Bug**: Softmax using bfloat16 accumulation (`fp32_dest_acc_en=false`) loses significant precision when processing attention score distributions from Q@K^T.
+
+**Evidence**:
+- Q @ K^T computation: PCC >0.999 ✅
+- Softmax on those scores: PCC 0.81 ❌ (BUG!)
+- Softmax @ V: PCC >0.999 ✅ (if softmax was correct)
+- Other bfloat16 operations (matmul, add, etc.): PCC >0.999 ✅
+
+**Characteristics**:
+- Specific to softmax accumulation, not general bfloat16 issue
+- Triggered by attention score distributions (range ~[-2, 5])
+- Output values compressed toward zero
+- Only visible with real BERT data, not random test data
+
+### Current Workaround (NOT A FIX)
+
+**Temporary Workaround**: Enable FP32 accumulation in softmax
+**File**: `sources/ttml/core/compute_kernel_config.cpp`
+**Change**: Set `fp32_dest_acc_en = true` in `ComputeKernelConfig::softmax()`
+
+**Result with workaround**:
+- bert-tiny: All blocks PCC >0.999 ✅
+- bert-base: All 12 blocks PCC >0.999 ✅
+
+**IMPORTANT**: This is a **WORKAROUND**, not a fix:
+- ⚠️ **Performance penalty**: FP32 accumulation is slower than bfloat16
+- ⚠️ **Masks root cause**: The real bug in bfloat16 softmax remains unfixed
+- ⚠️ **Not sustainable**: bfloat16 is the performance datatype we need to use
+
+### Real Fix Needed
+
+**The actual bug** needs to be fixed in the TTNN/hardware softmax kernel:
+- Softmax with bfloat16 accumulation must handle attention score patterns correctly
+- Other operations work fine with bfloat16 - only softmax fails
+- This is likely a hardware/kernel precision issue requiring TTNN team investigation
+
+**Next Action**: Report bug to TTNN/hardware team with reproducible test case showing softmax bfloat16 precision loss on attention patterns.
 
 ---
 

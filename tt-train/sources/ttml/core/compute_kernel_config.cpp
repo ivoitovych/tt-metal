@@ -15,9 +15,13 @@ ttnn::WormholeComputeKernelConfig ComputeKernelConfig::precise() {
     return config;
 }
 
-ttnn::WormholeComputeKernelConfig ComputeKernelConfig::softmax() {
+ttnn::WormholeComputeKernelConfig ComputeKernelConfig::softmax(bool use_fp32_accumulation_workaround) {
     ttnn::WormholeComputeKernelConfig config;
-    config.fp32_dest_acc_en = true;  // Enable FP32 accumulation for better precision
+    // WORKAROUND (NOT A FIX): FP32 accumulation to avoid bfloat16 precision bug
+    // Bug: Softmax with bfloat16 accumulation loses precision on attention patterns (PCC 0.81)
+    // Workaround: Use FP32 accumulation (performance penalty but PCC >0.999)
+    // Real fix needed: TTNN/hardware team must fix bfloat16 softmax kernel
+    config.fp32_dest_acc_en = use_fp32_accumulation_workaround;
     config.math_approx_mode = false;
     config.math_fidelity = MathFidelity::HiFi4;
     config.packer_l1_acc = true;
