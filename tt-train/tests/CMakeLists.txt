@@ -64,6 +64,8 @@ set(SOURCES
     ops/binary_ops_test.cpp
     ops/scaled_dot_product_attention_test.cpp
     ops/gelu_op_test.cpp
+    ops/embedding_batch_regression_test.cpp
+    ops/multi_head_attention_batch_regression_test.cpp
 )
 
 add_executable(ttml_tests ${SOURCES})
