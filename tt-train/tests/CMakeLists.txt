@@ -66,6 +66,7 @@ set(SOURCES
     ops/gelu_op_test.cpp
     ops/embedding_batch_regression_test.cpp
     ops/multi_head_attention_batch_regression_test.cpp
+    ops/embedding_word_vs_token_type_test.cpp
 )
 
 add_executable(ttml_tests ${SOURCES})
