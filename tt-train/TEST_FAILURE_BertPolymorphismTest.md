@@ -1,7 +1,7 @@
 # Test Failure: BertPolymorphismTest.BaseTransformerOperatorCall
 
 **Date**: 2025-11-14
-**Status**: ❌ **FAILING IN TEST SUITE, PASSES IN ISOLATION**
+**Status**: ✅ **FIXED** (2025-11-15)
 **Severity**: LOW - Test ordering issue, unrelated to softmax workaround changes
 
 ---
@@ -251,10 +251,55 @@ Expected result: All 53 tests pass consistently.
 
 ## Conclusion
 
-This test failure is a **pre-existing test infrastructure issue** unrelated to the softmax FP32 workaround changes. It does not impact:
+This test failure was a **test infrastructure issue** unrelated to the softmax FP32 workaround changes. It did not impact:
 - BERT model functionality
 - Softmax operation correctness
 - Numerical precision
 - Production deployments
 
-The issue should be fixed for test suite completeness, but is **not a blocker** for current work.
+---
+
+## Fix Applied (November 15, 2025)
+
+### Solution Implemented
+
+Added proper test fixture to `tests/core/softmax_precision_test.cpp`:
+
+```cpp
+/**
+ * Test fixture for SoftmaxPrecisionBug tests.
+ * Properly manages device lifecycle to prevent breaking subsequent tests.
+ */
+class SoftmaxPrecisionBug : public ::testing::Test {
+protected:
+    void SetUp() override {
+        ttml::autograd::ctx().open_device();
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().reset_graph();
+        ttml::autograd::ctx().close_device();
+    }
+};
+```
+
+Converted all tests from `TEST()` to `TEST_F()`:
+- `TEST(SoftmaxPrecisionBug, AttentionScorePattern)` → `TEST_F(SoftmaxPrecisionBug, AttentionScorePattern)`
+- `TEST(SoftmaxPrecisionBug, OtherBfloat16OpsWorkCorrectly)` → `TEST_F(SoftmaxPrecisionBug, OtherBfloat16OpsWorkCorrectly)`
+- `TEST(SoftmaxPrecisionBug, RealBertAttentionScores)` → `TEST_F(SoftmaxPrecisionBug, RealBertAttentionScores)`
+
+### Verification Results
+
+✅ **All BERT C++ tests now pass**: 53/53
+
+```bash
+# Minimal reproduction - NOW PASSES
+./build/tests/ttml_tests --gtest_filter="SoftmaxPrecisionBug.RealBertAttentionScores:BertPolymorphismTest.BaseTransformerOperatorCall"
+# Result: Both tests PASS ✅
+
+# Full BERT test suite - ALL PASS
+./build/tests/ttml_tests --gtest_filter="*Bert*:*BERT*"
+# Result: 53/53 tests PASS ✅
+```
+
+**Status**: ✅ **RESOLVED** - Test suite cleanup issue fixed, all BERT tests passing.

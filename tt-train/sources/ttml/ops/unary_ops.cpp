@@ -94,8 +94,17 @@ autograd::TensorPtr log_softmax(const autograd::TensorPtr& tensor, int dim) {
 }
 
 autograd::TensorPtr log_softmax_moreh(const autograd::TensorPtr& tensor, int dim) {
-    // NOTE: Using FP32 accumulation workaround for softmax precision bug
-    // TODO: Change to softmax(false) once TTNN fixes bfloat16 softmax kernel
+    // ⚠️ WORKAROUND - NOT A FIX ⚠️
+    // Using FP32 accumulation to work around TTNN bfloat16 softmax precision bug
+    //
+    // ISSUE: TTNN bfloat16 softmax loses precision on BERT attention patterns (PCC 0.81)
+    // WORKAROUND: Force FP32 accumulation (slower but correct)
+    // PERFORMANCE PENALTY: FP32 accumulation degrades performance vs native bfloat16
+    //
+    // TODO: Remove this workaround once TTNN team fixes bfloat16 softmax kernel
+    // TODO: Change to softmax(false) to restore native bfloat16 performance
+    //
+    // DO NOT REMOVE THIS WORKAROUND without verifying BERT attention PCC >0.999
     auto log_softmax = ttnn::moreh_softmax(
         tensor->get_value(),
         /* axis */ dim,

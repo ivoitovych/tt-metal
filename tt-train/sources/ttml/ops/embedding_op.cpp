@@ -21,10 +21,16 @@ autograd::TensorPtr embedding_op(const autograd::TensorPtr& tensor, const autogr
     auto input_shape = input_tensor.logical_shape();
     auto batch_size = input_shape[0];
 
-    // WORKAROUND: ttnn::embedding has a batch processing bug for batch_size > 1
-    // where it returns incorrect embeddings for batches after the first one.
-    // Process each batch separately and concatenate the results.
-    // TODO: Remove this workaround once ttnn::embedding is fixed
+    // ⚠️ WORKAROUND - NOT A FIX ⚠️
+    // ttnn::embedding has a CRITICAL batch processing bug for batch_size > 1
+    //
+    // ISSUE: Returns INCORRECT embeddings for batch indices > 0 (PCC 0.60)
+    //        Same token ID gets different (wrong) embeddings in batch 1 vs batch 0
+    // WORKAROUND: Process each batch separately and concatenate results
+    // PERFORMANCE PENALTY: Slower than single-call batch processing
+    //
+    // TODO: Remove this workaround once TTNN team fixes ttnn::embedding batch bug
+    // DO NOT REMOVE without verifying embedding PCC >0.999 for all batch sizes
 
     ttnn::Tensor embeddings;
 
