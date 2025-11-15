@@ -48,7 +48,7 @@ TEST_F(MultiHeadAttentionBatchRegressionTest, MultiHeadAttentionBatchSize1_Basel
     // Create random input
     std::vector<float> input_data((size_t)batch_size * seq_len * embedding_dim);
     for (size_t i = 0; i < input_data.size(); i++) {
-        input_data[i] = static_cast<float>(std::rand()) / RAND_MAX * 2.0F - 1.0F;
+        input_data[i] = static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX) * 2.0F - 1.0F;
     }
     auto input_tensor = core::from_vector(input_data, ttnn::Shape({batch_size, 1, seq_len, embedding_dim}), device);
     autograd::TensorPtr input = autograd::create_tensor(input_tensor);
@@ -77,7 +77,7 @@ TEST_F(MultiHeadAttentionBatchRegressionTest, MultiHeadAttentionBatchSize2) {
     std::srand(42);
     std::vector<float> input_data((size_t)batch_size * seq_len * embedding_dim);
     for (size_t i = 0; i < input_data.size(); i++) {
-        input_data[i] = static_cast<float>(std::rand()) / RAND_MAX * 2.0F - 1.0F;
+        input_data[i] = static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX) * 2.0F - 1.0F;
     }
     auto input_tensor = core::from_vector(input_data, ttnn::Shape({batch_size, 1, seq_len, embedding_dim}), device);
     autograd::TensorPtr input = autograd::create_tensor(input_tensor);
@@ -106,7 +106,7 @@ TEST_F(MultiHeadAttentionBatchRegressionTest, HeadsCreationBatchSize2_DirectTest
     // Shape should be [batch_size, 1, seq_len, embedding_dim * 3]
     std::vector<float> qkv_data((size_t)batch_size * seq_len * embedding_dim * 3);
     for (size_t i = 0; i < qkv_data.size(); i++) {
-        qkv_data[i] = static_cast<float>(std::rand()) / RAND_MAX * 2.0F - 1.0F;
+        qkv_data[i] = static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX) * 2.0F - 1.0F;
     }
     auto qkv_tensor = core::from_vector(qkv_data, ttnn::Shape({batch_size, 1, seq_len, embedding_dim * 3}), device);
     autograd::TensorPtr qkv = autograd::create_tensor(qkv_tensor);
@@ -161,7 +161,7 @@ TEST_F(MultiHeadAttentionBatchRegressionTest, HeadsCreationBatchSize1_Baseline) 
     // Create QKV tensor
     std::vector<float> qkv_data((size_t)batch_size * seq_len * embedding_dim * 3);
     for (size_t i = 0; i < qkv_data.size(); i++) {
-        qkv_data[i] = static_cast<float>(std::rand()) / RAND_MAX * 2.0F - 1.0F;
+        qkv_data[i] = static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX) * 2.0F - 1.0F;
     }
     auto qkv_tensor = core::from_vector(qkv_data, ttnn::Shape({batch_size, 1, seq_len, embedding_dim * 3}), device);
     autograd::TensorPtr qkv = autograd::create_tensor(qkv_tensor);
@@ -198,7 +198,7 @@ TEST_F(MultiHeadAttentionBatchRegressionTest, HeadsCreationBatchSize4_ScalingTes
 
     std::vector<float> qkv_data((size_t)batch_size * seq_len * embedding_dim * 3);
     for (size_t i = 0; i < qkv_data.size(); i++) {
-        qkv_data[i] = static_cast<float>(std::rand()) / RAND_MAX * 2.0F - 1.0F;
+        qkv_data[i] = static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX) * 2.0F - 1.0F;
     }
     auto qkv_tensor = core::from_vector(qkv_data, ttnn::Shape({batch_size, 1, seq_len, embedding_dim * 3}), device);
     autograd::TensorPtr qkv = autograd::create_tensor(qkv_tensor);
