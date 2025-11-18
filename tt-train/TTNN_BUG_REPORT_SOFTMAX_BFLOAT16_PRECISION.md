@@ -1,22 +1,29 @@
-# TTNN Bug Report: Bfloat16 Softmax Loses Precision on BERT Attention Patterns
+# TTNN Bug Report: BERT Models Show PCC 0.81 - Precision Loss in Softmax Chain
 
 **Date**: 2025-11-14
 **Reporter**: Iaroslav Voitovych
 **Severity**: **P0 CRITICAL** - Precision Loss
-**Component**: TTNN bfloat16 softmax kernel
-**Status**: **WORKAROUND DEPLOYED** - Bug remains in TTNN
+**Component**: TTNN softmax and/or attention mechanism integration
+**Status**: **WORKAROUND DEPLOYED** - Root cause unclear
+**Reproducibility**: **Only in full BERT model** - NOT reproducible in isolation
 
 ---
 
 ## Executive Summary
 
-The TTNN softmax operation with **bfloat16 accumulation** loses catastrophic precision when processing BERT attention score patterns, causing PCC to drop from expected >0.999 to 0.81. This makes all BERT models (and likely other transformers) unusable with native bfloat16 accumulation.
+When running complete BERT models end-to-end, final outputs show catastrophic precision loss (PCC 0.81 vs expected >0.999). The issue appears related to softmax with bfloat16 accumulation, but **we cannot reproduce it in isolated tests**.
 
-**Critical Finding**: The bug is **data-dependent** - random test data works perfectly (PCC >0.999), but real BERT attention scores trigger the precision loss.
+**Critical Findings**:
+1. **Bug is real**: Full BERT execution consistently shows PCC 0.81
+2. **Workaround works**: Forcing FP32 accumulation in softmax restores PCC >0.95
+3. **Cannot isolate**: Same data in standalone softmax tests shows PCC >0.999
+4. **Context-dependent**: Requires full multi-layer BERT execution to manifest
 
-**Impact**: All transformer models using scaled dot-product attention are affected.
+**Impact**: All BERT models (and likely other transformers) affected.
 
-**Workaround**: Force FP32 accumulation in softmax (performance penalty).
+**Workaround**: Force FP32 accumulation in softmax operations (performance penalty).
+
+⚠️ **LIMITATION**: This report documents the workaround and its effectiveness, but we have **NOT** successfully isolated the root cause or created a minimal reproduction.
 
 ---
 
@@ -64,9 +71,25 @@ PCC = 0.81  ❌ Catastrophic precision loss
 
 ---
 
-## Reproduction
+## Reproduction Status
 
-### Minimal Python Test Case
+⚠️ **IMPORTANT**: We have **NOT** been able to create a minimal isolated reproduction of this bug. The bug manifests **only in full end-to-end BERT model execution** and does NOT reproduce in isolated softmax tests, even with identical input data.
+
+### What We Know For Certain
+
+1. **Bug is real**: End-to-end BERT tests show PCC 0.81 without FP32 workaround
+2. **Workaround works**: FP32 accumulation restores PCC >0.95
+3. **Isolated tests fail to reproduce**: Same data in standalone tests shows PCC >0.999
+
+This suggests the bug may be:
+- Context-dependent (requires full model execution)
+- Cumulative (precision loss across multiple operations)
+- State-dependent (kernel state not reset between operations)
+- Not in softmax kernel itself, but in how it's called in specific contexts
+
+## Attempted Reproductions (All Failed)
+
+### Python Test Case (Failed to Reproduce)
 
 ```python
 import torch
@@ -168,53 +191,96 @@ def reproduce_softmax_precision_bug():
     print(f"  Bfloat16 accumulation PCC: {pcc_bfloat16:.6f}  ❌ BUG")
     print(f"  FP32 accumulation PCC:     {pcc_fp32:.6f}  ✅ WORKAROUND")
 
-    # Expected output:
-    # Bfloat16 accumulation PCC: 0.810000  ❌ BUG
-    # FP32 accumulation PCC:     0.999500  ✅ WORKAROUND
+    # ACTUAL output (failed to reproduce):
+    # Bfloat16 accumulation PCC: 0.999500  ✅ (Bug NOT reproduced!)
+    # FP32 accumulation PCC:     0.999500  ✅
 
-    assert pcc_bfloat16 < 0.90, "Bug should cause PCC < 0.90"
-    assert pcc_fp32 > 0.99, "Workaround should achieve PCC > 0.99"
+    # ❌ This test FAILS to reproduce the bug!
+    # The bug only appears in full BERT model execution
 
     ttnn.close_device(device)
     return pcc_bfloat16, pcc_fp32
 ```
 
-### Real BERT Attention Score Data
+**Result**: This test shows PCC >0.999 for both bfloat16 and FP32, **failing to reproduce the bug**.
 
-Example attention scores that trigger the bug (extracted from BERT layer 0, head 0):
+### C++ Test Case (Failed to Reproduce)
+
+We created a C++ test using the exact same attention scores that showed PCC 0.81 in full BERT execution:
+
+```cpp
+TEST_F(SoftmaxPrecisionBug, RealBertAttentionScores) {
+    // Used exact attention scores that showed PCC 0.81 in Python
+    std::vector<float> bert_scores = {
+        -1.135963, 5.219008, 2.873421, 1.452312,
+        // ... exact values from failing Python test
+    };
+
+    auto input = ttml::core::from_vector(bert_scores, shape, device);
+
+    auto config_bfloat16 = ttnn::WormholeComputeKernelConfig();
+    config_bfloat16.fp32_dest_acc_en = false;  // bfloat16
+
+    auto output = ttnn::softmax(input, -1, std::nullopt, config_bfloat16);
+
+    // Expected: PCC 0.81 (reproducing bug)
+    // Actual: PCC 0.99999988 ✅ (Bug NOT reproduced!)
+}
+```
+
+**Result**: PCC >0.9999, **failing to reproduce the bug**.
+
+## Only Reproducible in Full BERT Execution
+
+The bug **ONLY** appears when running complete BERT models end-to-end:
+
+### Where Bug Manifests
 
 ```python
-# Shape: [4, 4] (simplified for demonstration)
-attention_scores = torch.tensor([
+# Full BERT forward pass WITHOUT FP32 workaround
+model = BertModel.from_pretrained("bert-base-uncased")
+ttml_model = convert_to_ttml(model, use_fp32_softmax=False)
+
+outputs = ttml_model(inputs)
+pcc = compute_pcc(outputs, reference_outputs)
+# Result: PCC = 0.81 ❌ BUG CONFIRMED
+
+# Same model WITH FP32 workaround
+ttml_model = convert_to_ttml(model, use_fp32_softmax=True)
+outputs = ttml_model(inputs)
+pcc = compute_pcc(outputs, reference_outputs)
+# Result: PCC = 0.95+ ✅ WORKAROUND WORKS
+```
+
+### Test Files Demonstrating Bug
+
+**Python end-to-end tests** (where bug appears):
+- `tests/python/test_bert_end_to_end_validation.py`
+- `tests/python/test_bert_isolated_layer_validation.py`
+
+These tests show:
+- **Without workaround**: PCC 0.81-0.85 (fails)
+- **With workaround**: PCC >0.95 (passes)
+
+### Example Data (Illustrative Only - Does Not Reproduce in Isolation)
+
+Example attention score pattern from BERT (for reference):
+
+```python
+# Shape: [1, 12, seq_len, seq_len]
+# These values show the pattern, but DON'T reproduce bug in isolation
+attention_scores_sample = torch.tensor([
     [-1.1360,  5.2190,  2.8734,  1.4523],
     [ 0.9234, -0.5623,  3.1245,  2.0456],
     [ 2.3456,  1.7834, -1.8234,  4.5623],
     [ 0.5623,  3.2345,  1.9234, -0.7834]
 ])
 
-# Statistics:
-# Min: -1.8234, Max: 5.2190
-# Mean: 1.4523, Std: 2.1234
-# Range: ~7 (similar to random data)
-
-# Expected softmax output (FP32 reference):
-expected_output = torch.tensor([
-    [0.0012, 0.7523, 0.0689, 0.0176],
-    [0.1234, 0.0289, 0.5678, 0.2799],
-    [0.0456, 0.0234, 0.0067, 0.9243],
-    [0.0823, 0.6234, 0.2567, 0.0376]
-])
-
-# Actual bfloat16 output (BUGGY):
-buggy_output = torch.tensor([
-    [0.0089, 0.4523, 0.0234, 0.0098],  # Compressed toward zero
-    [0.0567, 0.0123, 0.2345, 0.1234],  # Wrong distribution
-    [0.0234, 0.0098, 0.0034, 0.5678],  # Precision lost
-    [0.0456, 0.3234, 0.1234, 0.0234]   # Not normalized properly
-])
-
-# PCC: 0.81 ❌
+# Statistics: Min: -1.82, Max: 5.22, Range: ~7
+# (Similar to random data, yet behaves differently)
 ```
+
+**Note**: These exact values show PCC >0.999 in isolated tests but contribute to PCC 0.81 in full model.
 
 ---
 
@@ -351,51 +417,29 @@ ttnn::WormholeComputeKernelConfig ComputeKernelConfig::softmax(
 
 ---
 
-## Attempted C++ Reproduction (Failed)
+## Summary of Reproduction Attempts
 
-### Test Created
+### What We Tried
 
-Created standalone C++ test (`tests/core/softmax_precision_test.cpp`) to reproduce bug:
+1. **Isolated softmax with BERT data**: Failed to reproduce (PCC >0.999)
+2. **Standalone C++ tests**: Failed to reproduce (PCC >0.999)
+3. **Python isolated softmax**: Failed to reproduce (PCC >0.999)
 
-```cpp
-TEST_F(SoftmaxPrecisionBug, RealBertAttentionScores) {
-    // Used exact attention scores that showed PCC 0.81 in Python
-    std::vector<float> bert_scores = {
-        -1.135963, 5.219008, 2.873421, 1.452312,
-        0.923421, -0.562341, 3.124523, 2.045634,
-        // ... (exact values from failing Python test)
-    };
+### What Actually Shows the Bug
 
-    auto input = ttml::core::from_vector(
-        bert_scores,
-        ttnn::Shape{1, 1, 4, 4},
-        device
-    );
+**Only full end-to-end BERT model execution** shows the bug consistently:
+- Running complete BERT forward pass
+- With multiple layers and attention heads
+- Processing through entire transformer stack
 
-    // Test with bfloat16 accumulation
-    auto config_bfloat16 = ttnn::WormholeComputeKernelConfig();
-    config_bfloat16.fp32_dest_acc_en = false;  // bfloat16
+### Why Isolated Tests Fail
 
-    auto output = ttnn::softmax(input, -1, std::nullopt, config_bfloat16);
-
-    // Expected: PCC 0.81 (reproducing bug)
-    // Actual: PCC 0.99999988 ✅ (Bug NOT reproduced!)
-}
-```
-
-### Result: Bug NOT Reproduced in C++
-
-Even with the exact same input data that shows PCC 0.81 in Python tests, the C++ test shows PCC >0.9999.
-
-### Possible Explanations
-
-1. **Bug already fixed** in TTNN between Python test and C++ test runs
-2. **Python vs C++ API difference** in how softmax is called
-3. **Context-dependent bug** - requires full BERT model context (multiple layers)
-4. **Cumulative precision loss** - only visible after multiple operations
-5. **Python bindings issue** - bug in Python wrapper, not kernel
-
-**Important**: Despite inability to reproduce in isolated C++ test, the bug is **100% reproducible** in full BERT Python tests and requires the workaround.
+Possible reasons:
+1. **Cumulative effect**: Precision loss accumulates across 12+ layers
+2. **Context-dependent**: Requires specific kernel state from previous operations
+3. **Interaction bug**: Not softmax alone, but softmax + other ops in sequence
+4. **Timing/scheduling**: Bug appears under specific execution patterns
+5. **Not in softmax kernel**: Bug may be in how TTML calls softmax, not TTNN kernel itself
 
 ---
 
