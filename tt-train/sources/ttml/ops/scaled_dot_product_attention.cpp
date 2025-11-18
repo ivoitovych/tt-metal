@@ -140,7 +140,7 @@ autograd::TensorPtr scaled_dot_product_attention(
     const autograd::TensorPtr& query,
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
-    const autograd::TensorPtr& mask) {
+    const std::optional<autograd::TensorPtr>& mask) {
     validate_qkv_shapes(query, key, value);
 
     auto [batch_num, heads, seq_len, embedding_dim] = query->get_value().logical_shape().to_array_4D();
@@ -156,7 +156,7 @@ autograd::TensorPtr scaled_dot_product_attention(
     ttnn::Tensor qk_scaled = group_shared_matmul(q_scaled, key_tensor, /*transpose_a=*/false, /*transpose_b=*/true);
 
     if (mask) {
-        auto mask_tensor = mask->get_value();
+        auto mask_tensor = (*mask)->get_value();
         // Apply attention mask: where mask=0 (padding), set to -1e9 to suppress attention
         // Formula: qk_masked = mask * qk_scaled + (mask - 1) * (1e9)
         //   - Where mask=1 (real tokens): 1 * qk + 0 * (1e9) = qk
@@ -247,7 +247,7 @@ autograd::TensorPtr scaled_sigmoid_dot_product_attention(
     const autograd::TensorPtr& query,
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
-    const autograd::TensorPtr& mask) {
+    const std::optional<autograd::TensorPtr>& mask) {
     const float scale = 1.0F / std::sqrt(static_cast<float>(query->get_value().logical_shape()[-1]));
     // (B, H, S, E) x (B, H, E, S) -> (B, H, S, S)
     auto qk_t =
@@ -255,7 +255,7 @@ autograd::TensorPtr scaled_sigmoid_dot_product_attention(
     // (B, H, S, S) * scale
     auto qk_scaled = ttnn::multiply(qk_t, scale);
     if (mask) {
-        qk_scaled = ttnn::where(mask->get_value(), qk_scaled, /* other */ -1e9F);
+        qk_scaled = ttnn::where((*mask)->get_value(), qk_scaled, /* other */ -1e9F);
     }
     // (B, H, S, S)
     // auto attention_weights = ttnn_fixed::softmax(qk_scaled, /* axis */ 3);
@@ -282,7 +282,7 @@ autograd::TensorPtr scaled_sigmoid_dot_product_attention(
                     .front();
 
             if (mask) {
-                grad_scaled_dot = ttnn::where(mask->get_value(), grad_scaled_dot, /* other */ 0.0F);
+                grad_scaled_dot = ttnn::where((*mask)->get_value(), grad_scaled_dot, /* other */ 0.0F);
             }
 
             auto grad_q = ttnn_fixed::matmul(

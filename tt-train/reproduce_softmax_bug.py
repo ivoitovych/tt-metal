@@ -23,8 +23,8 @@ import os
 from pathlib import Path
 
 # Add TTML to path
-sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/build/sources')
-import ttml
+sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/build/sources/ttml')
+import _ttml as ttml
 
 from transformers import BertModel
 from safetensors.torch import save_file
@@ -92,7 +92,7 @@ def reproduce_bug(model_name="prajjwal1/bert-tiny", batch_size=1, seq_len=32):
     ttml_config.use_pooler = False
 
     ttml_model = ttml.models.bert.create(ttml_config)
-    ttml_model.load_model_from_safetensors(str(safetensors_path))
+    ttml_model.load_from_safetensors(str(safetensors_path))
     print("Weights loaded successfully")
 
     # Create test inputs
