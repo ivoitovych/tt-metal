@@ -64,6 +64,21 @@ autograd::TensorPtr silu(const autograd::TensorPtr& tensor, bool use_composite_b
     return out;
 }
 
+autograd::TensorPtr tanh(const autograd::TensorPtr& tensor) {
+    auto out = autograd::create_tensor();
+    out->set_value(ttnn::tanh(tensor->get_value()));
+    autograd::GradFunction grad = [tensor, out]() {
+        tt::tt_metal::MemoryConfig mem_config;
+        auto res = ttnn::tanh_bw(out->get_grad(), tensor->get_value(), mem_config);
+        tensor->add_grad(res[0].value());
+    };
+
+    auto links = autograd::get_links(tensor);
+    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+
+    return out;
+}
+
 autograd::TensorPtr log_softmax(const autograd::TensorPtr& tensor, int dim) {
     auto log_softmax = ttnn_fixed::log_softmax(tensor->get_value(), dim);
     auto out = autograd::create_tensor(log_softmax);
@@ -79,6 +94,17 @@ autograd::TensorPtr log_softmax(const autograd::TensorPtr& tensor, int dim) {
 }
 
 autograd::TensorPtr log_softmax_moreh(const autograd::TensorPtr& tensor, int dim) {
+    // ⚠️ WORKAROUND - NOT A FIX ⚠️
+    // Using FP32 accumulation to work around TTNN bfloat16 softmax precision bug
+    //
+    // ISSUE: TTNN bfloat16 softmax loses precision on BERT attention patterns (PCC 0.81)
+    // WORKAROUND: Force FP32 accumulation (slower but correct)
+    // PERFORMANCE PENALTY: FP32 accumulation degrades performance vs native bfloat16
+    //
+    // TODO: Remove this workaround once TTNN team fixes bfloat16 softmax kernel
+    // TODO: Change to softmax(false) to restore native bfloat16 performance
+    //
+    // DO NOT REMOVE THIS WORKAROUND without verifying BERT attention PCC >0.999
     auto log_softmax = ttnn::moreh_softmax(
         tensor->get_value(),
         /* axis */ dim,
@@ -86,7 +112,7 @@ autograd::TensorPtr log_softmax_moreh(const autograd::TensorPtr& tensor, int dim
         ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOp::LOGSOFTMAX,
         ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOpParallelizationStrategy::NONE,
         /* output_mem_config */ std::nullopt,
-        /* compute_kernel_config */ core::ComputeKernelConfig::softmax());
+        /* compute_kernel_config */ core::ComputeKernelConfig::softmax(/* use_fp32_accumulation_workaround */ true));
     auto out = autograd::create_tensor(log_softmax);
 
     autograd::GradFunction grad = [tensor, out, dim]() {

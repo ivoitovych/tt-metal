@@ -11,7 +11,13 @@ namespace ttml::core {
 class ComputeKernelConfig {
 public:
     static ttnn::WormholeComputeKernelConfig precise();
-    static ttnn::WormholeComputeKernelConfig softmax();
+
+    // ⚠️ WARNING: use_fp32_accumulation_workaround=true causes PERFORMANCE DEGRADATION
+    // Default is false (native bfloat16) to preserve TTNN framework behavior.
+    // Only workaround code should explicitly pass true when needed.
+    // Using FP32 instead of bfloat16 is slower and should NOT be considered a permanent solution.
+    static ttnn::WormholeComputeKernelConfig softmax(bool use_fp32_accumulation_workaround = false);
+
     static ttnn::WormholeComputeKernelConfig matmul();
     static ttnn::WormholeComputeKernelConfig fast();
 };

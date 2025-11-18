@@ -4,11 +4,13 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/tuple.h>
 
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
+#include "ops/bert_losses.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/distributed/comm_ops.hpp"
 #include "ops/dropout_op.hpp"
@@ -21,6 +23,7 @@
 #include "ops/rmsnorm_op.hpp"
 #include "ops/rope_op.hpp"
 #include "ops/sampling_op.hpp"
+#include "ops/scaled_dot_product_attention.hpp"
 #include "ops/unary_ops.hpp"
 
 namespace ttml::nanobind::ops {
@@ -29,6 +32,7 @@ using namespace ttml::ops;
 void py_module_types(nb::module_& m) {
     ttml::nanobind::util::export_enum<ReduceType>(m);
 
+    m.def_submodule("bert_losses");
     m.def_submodule("binary");
     m.def_submodule("distributed");
     m.def_submodule("dropout");
@@ -116,13 +120,24 @@ void py_module(nb::module_& m) {
 
     {
         auto py_layernorm = static_cast<nb::module_>(m.attr("layernorm"));
-        py_layernorm.def("layernorm", &ttml::ops::layernorm, nb::arg("tensor"), nb::arg("gamma"), nb::arg("beta"));
+        py_layernorm.def(
+            "layernorm",
+            &ttml::ops::layernorm,
+            nb::arg("tensor"),
+            nb::arg("gamma"),
+            nb::arg("beta"),
+            nb::arg("eps") = 1e-5F,
+            nb::arg("enable_hardware_clamp") = true,
+            nb::arg("min_safe_eps") = 1e-4F);
         py_layernorm.def(
             "composite_layernorm",
             &ttml::ops::composite_layernorm,
             nb::arg("tensor"),
             nb::arg("gamma"),
-            nb::arg("beta"));
+            nb::arg("beta"),
+            nb::arg("eps") = 1e-5F,
+            nb::arg("enable_hardware_clamp") = true,
+            nb::arg("min_safe_eps") = 1e-4F);
     }
 
     {
@@ -167,6 +182,61 @@ void py_module(nb::module_& m) {
     }
 
     {
+        auto py_bert_losses = static_cast<nb::module_>(m.attr("bert_losses"));
+        py_bert_losses.def(
+            "compute_sequence_classification_loss",
+            &ttml::ops::bert_losses::compute_sequence_classification_loss,
+            nb::arg("logits"),
+            nb::arg("labels"),
+            "Compute cross-entropy loss for sequence classification");
+        py_bert_losses.def(
+            "compute_token_classification_loss",
+            &ttml::ops::bert_losses::compute_token_classification_loss,
+            nb::arg("logits"),
+            nb::arg("labels"),
+            nb::arg("attention_mask") = nullptr,
+            "Compute token classification loss with optional attention mask");
+        py_bert_losses.def(
+            "compute_question_answering_loss",
+            &ttml::ops::bert_losses::compute_question_answering_loss,
+            nb::arg("combined_logits"),
+            nb::arg("start_positions"),
+            nb::arg("end_positions"),
+            "Compute QA loss from combined start/end logits");
+        py_bert_losses.def(
+            "compute_question_answering_loss_split",
+            &ttml::ops::bert_losses::compute_question_answering_loss_split,
+            nb::arg("start_logits"),
+            nb::arg("end_logits"),
+            nb::arg("start_positions"),
+            nb::arg("end_positions"),
+            "Compute QA loss from separate start/end logits");
+        py_bert_losses.def(
+            "compute_masked_lm_loss",
+            &ttml::ops::bert_losses::compute_masked_lm_loss,
+            nb::arg("logits"),
+            nb::arg("labels"),
+            nb::arg("attention_mask") = nullptr,
+            "Compute masked language modeling loss");
+        py_bert_losses.def(
+            "compute_nsp_loss",
+            &ttml::ops::bert_losses::compute_nsp_loss,
+            nb::arg("logits"),
+            nb::arg("labels"),
+            "Compute next sentence prediction loss");
+        py_bert_losses.def(
+            "compute_pretraining_loss",
+            &ttml::ops::bert_losses::compute_pretraining_loss,
+            nb::arg("mlm_logits"),
+            nb::arg("nsp_logits"),
+            nb::arg("mlm_labels"),
+            nb::arg("nsp_labels"),
+            nb::arg("mlm_weight") = 1.0F,
+            nb::arg("nsp_weight") = 1.0F,
+            "Compute combined pretraining loss (MLM + NSP)");
+    }
+
+    {
         auto py_matmul = static_cast<nb::module_>(m.attr("matmul"));
         py_matmul.def(
             "matmul_op",
@@ -179,6 +249,8 @@ void py_module(nb::module_& m) {
 
     {
         auto py_multi_head_utils = static_cast<nb::module_>(m.attr("multi_head_utils"));
+        // Note: heads_creation returns std::tuple, which is automatically converted by nanobind
+        // with the <nanobind/stl/tuple.h> include
         py_multi_head_utils.def("heads_creation", &ttml::ops::heads_creation, nb::arg("qkv"), nb::arg("num_heads"));
         py_multi_head_utils.def("heads_fusion", &ttml::ops::heads_fusion, nb::arg("x"));
         py_multi_head_utils.def(
@@ -188,6 +260,24 @@ void py_module(nb::module_& m) {
             nb::arg("kvs"),
             nb::arg("num_heads"),
             nb::arg("num_groups"));
+
+        // Attention operations
+        py_multi_head_utils.def(
+            "scaled_dot_product_attention",
+            &ttml::ops::scaled_dot_product_attention,
+            nb::arg("query"),
+            nb::arg("key"),
+            nb::arg("value"),
+            nb::arg("mask") = nullptr,
+            "Scaled dot-product attention: softmax(Q @ K^T / sqrt(d_k)) @ V");
+        py_multi_head_utils.def(
+            "scaled_sigmoid_dot_product_attention",
+            &ttml::ops::scaled_sigmoid_dot_product_attention,
+            nb::arg("query"),
+            nb::arg("key"),
+            nb::arg("value"),
+            nb::arg("mask") = nullptr,
+            "Scaled sigmoid dot-product attention");
     }
 
     {
@@ -266,6 +356,7 @@ void py_module(nb::module_& m) {
         py_unary.def("relu", &ttml::ops::relu, nb::arg("tensor"));
         py_unary.def("gelu", &ttml::ops::gelu, nb::arg("tensor"));
         py_unary.def("silu", &ttml::ops::silu, nb::arg("tensor"), nb::arg("use_composite_bw") = false);
+        py_unary.def("tanh", &ttml::ops::tanh, nb::arg("tensor"));
         py_unary.def("mean", &ttml::ops::mean, nb::arg("tensor"));
         // py_unary.def("sum", &ttml::ops::sum,
         //              nb::arg("tensor"));
