@@ -12,7 +12,6 @@
 
 #include "models/base_transformer.hpp"
 #include "models/bert.hpp"
-#include "models/bert_tasks.hpp"
 #include "models/distributed/gpt2.hpp"
 #include "models/distributed/llama.hpp"
 #include "models/distributed/pipeline_parallel_llama.hpp"
@@ -41,26 +40,6 @@ void py_module_types(nb::module_& m, nb::module_& m_modules) {
         auto py_bert_module = m.def_submodule("bert");
         nb::class_<models::bert::BertConfig>(py_bert_module, "BertConfig");
         nb::class_<models::bert::Bert, models::BaseTransformer>(py_bert_module, "Bert");
-
-        // Task-specific configs
-        nb::class_<models::bert::SequenceClassificationConfig>(py_bert_module, "SequenceClassificationConfig");
-        nb::class_<models::bert::TokenClassificationConfig>(py_bert_module, "TokenClassificationConfig");
-        nb::class_<models::bert::QuestionAnsweringConfig>(py_bert_module, "QuestionAnsweringConfig");
-        nb::class_<models::bert::MaskedLMConfig>(py_bert_module, "MaskedLMConfig");
-        nb::class_<models::bert::PreTrainingConfig>(py_bert_module, "PreTrainingConfig");
-
-        // Task models
-        nb::class_<models::bert::BertForSequenceClassification, models::BaseTransformer>(
-            py_bert_module, "BertForSequenceClassification");
-        nb::class_<models::bert::BertForTokenClassification, models::BaseTransformer>(
-            py_bert_module, "BertForTokenClassification");
-        nb::class_<models::bert::BertForQuestionAnswering, models::BaseTransformer>(
-            py_bert_module, "BertForQuestionAnswering");
-        nb::class_<models::bert::BertForMaskedLM, models::BaseTransformer>(py_bert_module, "BertForMaskedLM");
-        nb::class_<models::bert::BertForPreTraining, models::BaseTransformer>(py_bert_module, "BertForPreTraining");
-
-        // PreTrainingOutput struct
-        nb::class_<models::bert::BertForPreTraining::PreTrainingOutput>(py_bert_module, "PreTrainingOutput");
     }
 
     {
@@ -128,260 +107,29 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
 
         auto py_bert_config = static_cast<nb::class_<models::bert::BertConfig>>(py_bert_module.attr("BertConfig"));
         py_bert_config.def(nb::init<>());
-        py_bert_config.def_rw("vocab_size", &models::bert::BertConfig::vocab_size, "Vocabulary size");
-        py_bert_config.def_rw(
-            "max_sequence_length", &models::bert::BertConfig::max_sequence_length, "Max sequence length");
-        py_bert_config.def_rw("embedding_dim", &models::bert::BertConfig::embedding_dim, "Embedding dimensions");
-        py_bert_config.def_rw("intermediate_size", &models::bert::BertConfig::intermediate_size, "Intermediate size");
-        py_bert_config.def_rw("num_heads", &models::bert::BertConfig::num_heads, "Number of heads");
-        py_bert_config.def_rw("num_blocks", &models::bert::BertConfig::num_blocks, "Number of blocks");
-        py_bert_config.def_rw("dropout_prob", &models::bert::BertConfig::dropout_prob, "Dropout probability");
-        py_bert_config.def_rw("layer_norm_eps", &models::bert::BertConfig::layer_norm_eps, "Layer norm epsilon");
-        py_bert_config.def_rw(
-            "use_token_type_embeddings",
-            &models::bert::BertConfig::use_token_type_embeddings,
-            "Use token type embeddings");
-        py_bert_config.def_rw("type_vocab_size", &models::bert::BertConfig::type_vocab_size, "Type vocabulary size");
-        py_bert_config.def_rw("runner_type", &models::bert::BertConfig::runner_type, "Runner type");
-        py_bert_config.def_rw("use_pooler", &models::bert::BertConfig::use_pooler, "Use pooler");
-
-        // Bind BertBlock class for isolated layer testing
-        nb::class_<ttml::modules::BertBlock>(py_bert_module, "BertBlock")
-            .def(
-                "__call__",
-                static_cast<autograd::TensorPtr (ttml::modules::BertBlock::*)(
-                    const autograd::TensorPtr&, const autograd::TensorPtr&)>(&ttml::modules::BertBlock::operator()),
-                nb::arg("input"),
-                nb::arg("attention_mask"),
-                "BertBlock forward pass with input and attention_mask");
+        py_bert_config.def_rw("vocab_size", &models::bert::BertConfig::vocab_size);
+        py_bert_config.def_rw("max_sequence_length", &models::bert::BertConfig::max_sequence_length);
+        py_bert_config.def_rw("embedding_dim", &models::bert::BertConfig::embedding_dim);
+        py_bert_config.def_rw("intermediate_size", &models::bert::BertConfig::intermediate_size);
+        py_bert_config.def_rw("num_heads", &models::bert::BertConfig::num_heads);
+        py_bert_config.def_rw("num_blocks", &models::bert::BertConfig::num_blocks);
+        py_bert_config.def_rw("dropout_prob", &models::bert::BertConfig::dropout_prob);
+        py_bert_config.def_rw("layer_norm_eps", &models::bert::BertConfig::layer_norm_eps);
+        py_bert_config.def_rw("use_token_type_embeddings", &models::bert::BertConfig::use_token_type_embeddings);
+        py_bert_config.def_rw("use_pooler", &models::bert::BertConfig::use_pooler);
 
         auto py_bert =
             static_cast<nb::class_<models::bert::Bert, models::BaseTransformer>>(py_bert_module.attr("Bert"));
         py_bert.def(nb::init<const models::bert::BertConfig&>());
-        py_bert.def(
-            "load_model_from_safetensors",
-            [](models::bert::Bert& self, const std::filesystem::path& path) {
-                auto params = self.parameters();
-                models::bert::load_model_from_safetensors(path, params);
-            },
-            "Load model weights from safetensors file");
-        // Add three-parameter operator() for BERT-specific forward pass with attention mask
         py_bert.def(
             "__call__",
             static_cast<autograd::TensorPtr (models::bert::Bert::*)(
                 const autograd::TensorPtr&, const autograd::TensorPtr&, const autograd::TensorPtr&)>(
                 &models::bert::Bert::operator()),
             nb::arg("input_ids"),
-            nb::arg("attention_mask"),
-            nb::arg("token_type_ids"),
-            "BERT forward pass with input_ids, attention_mask, and token_type_ids");
-
-        // Bind IntermediateOutputs structure
-        nb::class_<models::bert::Bert::IntermediateOutputs>(py_bert_module, "IntermediateOutputs")
-            .def(nb::init<>())
-            .def_rw("embeddings", &models::bert::Bert::IntermediateOutputs::embeddings, "Embedding layer output")
-            .def_rw(
-                "embedding_intermediates",
-                &models::bert::Bert::IntermediateOutputs::embedding_intermediates,
-                "Granular embedding breakdown")
-            .def_rw(
-                "block_attention_outputs",
-                &models::bert::Bert::IntermediateOutputs::block_attention_outputs,
-                "Attention outputs from each block")
-            .def_rw(
-                "block_outputs",
-                &models::bert::Bert::IntermediateOutputs::block_outputs,
-                "Final output from each block")
-            .def_rw("final_output", &models::bert::Bert::IntermediateOutputs::final_output, "Final model output");
-
-        // Bind EmbeddingIntermediates structure for granular embedding debugging
-        nb::class_<models::bert::Bert::EmbeddingIntermediates>(py_bert_module, "EmbeddingIntermediates")
-            .def(nb::init<>())
-            .def_rw(
-                "word_embeddings",
-                &models::bert::Bert::EmbeddingIntermediates::word_embeddings,
-                "Word (token) embeddings after lookup")
-            .def_rw(
-                "after_position",
-                &models::bert::Bert::EmbeddingIntermediates::after_position,
-                "After adding positional embeddings")
-            .def_rw(
-                "token_type_embeddings",
-                &models::bert::Bert::EmbeddingIntermediates::token_type_embeddings,
-                "Token type embeddings (if used)")
-            .def_rw(
-                "after_token_type",
-                &models::bert::Bert::EmbeddingIntermediates::after_token_type,
-                "After adding token type embeddings")
-            .def_rw(
-                "after_layer_norm", &models::bert::Bert::EmbeddingIntermediates::after_layer_norm, "After LayerNorm")
-            .def_rw(
-                "after_dropout",
-                &models::bert::Bert::EmbeddingIntermediates::after_dropout,
-                "Final embeddings (after dropout)");
-
-        // Add forward_with_intermediates for layer-by-layer debugging
-        py_bert.def(
-            "forward_with_intermediates",
-            &models::bert::Bert::forward_with_intermediates,
-            nb::arg("input_ids"),
             nb::arg("attention_mask") = nullptr,
             nb::arg("token_type_ids") = nullptr,
-            "BERT forward pass that returns all intermediate layer outputs for debugging");
-
-        // Add get_embeddings_with_intermediates for granular embedding debugging
-        py_bert.def(
-            "get_embeddings_with_intermediates",
-            &models::bert::Bert::get_embeddings_with_intermediates,
-            nb::arg("input_ids"),
-            nb::arg("token_type_ids") = nullptr,
-            "Get embeddings with all intermediate tensors for granular debugging");
-
-        // Add methods for isolated layer testing
-        py_bert.def(
-            "get_embeddings",
-            [](models::bert::Bert& self,
-               const autograd::TensorPtr& input_ids,
-               const autograd::TensorPtr& token_type_ids) { return self.get_embeddings(input_ids, token_type_ids); },
-            nb::arg("input_ids"),
-            nb::arg("token_type_ids") = nullptr,
-            "Get embeddings for input_ids and optional token_type_ids");
-
-        py_bert.def(
-            "get_block",
-            [](models::bert::Bert& self, size_t index) { return self.get_block(index); },
-            nb::arg("index"),
-            "Get a specific BERT block by index for isolated testing");
-
-        py_bert.def(
-            "num_blocks",
-            [](const models::bert::Bert& self) { return self.get_config().num_blocks; },
-            "Get the number of blocks in the model");
-
-        // ====================================================================
-        // Task-specific configs
-        // ====================================================================
-
-        auto py_seq_cls_config = static_cast<nb::class_<models::bert::SequenceClassificationConfig>>(
-            py_bert_module.attr("SequenceClassificationConfig"));
-        py_seq_cls_config.def(nb::init<>());
-        py_seq_cls_config.def_rw("bert_config", &models::bert::SequenceClassificationConfig::bert_config);
-        py_seq_cls_config.def_rw("num_labels", &models::bert::SequenceClassificationConfig::num_labels);
-        py_seq_cls_config.def_rw("classifier_dropout", &models::bert::SequenceClassificationConfig::classifier_dropout);
-
-        auto py_token_cls_config = static_cast<nb::class_<models::bert::TokenClassificationConfig>>(
-            py_bert_module.attr("TokenClassificationConfig"));
-        py_token_cls_config.def(nb::init<>());
-        py_token_cls_config.def_rw("bert_config", &models::bert::TokenClassificationConfig::bert_config);
-        py_token_cls_config.def_rw("num_labels", &models::bert::TokenClassificationConfig::num_labels);
-        py_token_cls_config.def_rw("classifier_dropout", &models::bert::TokenClassificationConfig::classifier_dropout);
-
-        auto py_qa_config = static_cast<nb::class_<models::bert::QuestionAnsweringConfig>>(
-            py_bert_module.attr("QuestionAnsweringConfig"));
-        py_qa_config.def(nb::init<>());
-        py_qa_config.def_rw("bert_config", &models::bert::QuestionAnsweringConfig::bert_config);
-
-        auto py_mlm_config =
-            static_cast<nb::class_<models::bert::MaskedLMConfig>>(py_bert_module.attr("MaskedLMConfig"));
-        py_mlm_config.def(nb::init<>());
-        py_mlm_config.def_rw("bert_config", &models::bert::MaskedLMConfig::bert_config);
-        py_mlm_config.def_rw("tie_word_embeddings", &models::bert::MaskedLMConfig::tie_word_embeddings);
-
-        auto py_pretrain_config =
-            static_cast<nb::class_<models::bert::PreTrainingConfig>>(py_bert_module.attr("PreTrainingConfig"));
-        py_pretrain_config.def(nb::init<>());
-        py_pretrain_config.def_rw("bert_config", &models::bert::PreTrainingConfig::bert_config);
-        py_pretrain_config.def_rw("tie_word_embeddings", &models::bert::PreTrainingConfig::tie_word_embeddings);
-        py_pretrain_config.def_rw("mlm_loss_weight", &models::bert::PreTrainingConfig::mlm_loss_weight);
-        py_pretrain_config.def_rw("nsp_loss_weight", &models::bert::PreTrainingConfig::nsp_loss_weight);
-
-        // ====================================================================
-        // Task models
-        // ====================================================================
-
-        auto py_seq_cls = static_cast<nb::class_<models::bert::BertForSequenceClassification, models::BaseTransformer>>(
-            py_bert_module.attr("BertForSequenceClassification"));
-        py_seq_cls.def(nb::init<const models::bert::SequenceClassificationConfig&>());
-        py_seq_cls.def("get_num_labels", &models::bert::BertForSequenceClassification::get_num_labels);
-        py_seq_cls.def(
-            "__call__",
-            static_cast<autograd::TensorPtr (models::bert::BertForSequenceClassification::*)(
-                const autograd::TensorPtr&, const autograd::TensorPtr&, const autograd::TensorPtr&)>(
-                &models::bert::BertForSequenceClassification::operator()),
-            nb::arg("input_ids"),
-            nb::arg("attention_mask") = nullptr,
-            nb::arg("token_type_ids") = nullptr,
-            "BertForSequenceClassification forward pass");
-
-        auto py_token_cls = static_cast<nb::class_<models::bert::BertForTokenClassification, models::BaseTransformer>>(
-            py_bert_module.attr("BertForTokenClassification"));
-        py_token_cls.def(nb::init<const models::bert::TokenClassificationConfig&>());
-        py_token_cls.def("get_num_labels", &models::bert::BertForTokenClassification::get_num_labels);
-        py_token_cls.def(
-            "__call__",
-            static_cast<autograd::TensorPtr (models::bert::BertForTokenClassification::*)(
-                const autograd::TensorPtr&, const autograd::TensorPtr&, const autograd::TensorPtr&)>(
-                &models::bert::BertForTokenClassification::operator()),
-            nb::arg("input_ids"),
-            nb::arg("attention_mask") = nullptr,
-            nb::arg("token_type_ids") = nullptr,
-            "BertForTokenClassification forward pass");
-
-        auto py_qa = static_cast<nb::class_<models::bert::BertForQuestionAnswering, models::BaseTransformer>>(
-            py_bert_module.attr("BertForQuestionAnswering"));
-        py_qa.def(nb::init<const models::bert::QuestionAnsweringConfig&>());
-        py_qa.def(
-            "__call__",
-            static_cast<autograd::TensorPtr (models::bert::BertForQuestionAnswering::*)(
-                const autograd::TensorPtr&, const autograd::TensorPtr&, const autograd::TensorPtr&)>(
-                &models::bert::BertForQuestionAnswering::operator()),
-            nb::arg("input_ids"),
-            nb::arg("attention_mask") = nullptr,
-            nb::arg("token_type_ids") = nullptr,
-            "BertForQuestionAnswering forward pass");
-
-        auto py_mlm = static_cast<nb::class_<models::bert::BertForMaskedLM, models::BaseTransformer>>(
-            py_bert_module.attr("BertForMaskedLM"));
-        py_mlm.def(nb::init<const models::bert::MaskedLMConfig&>());
-        py_mlm.def("has_tied_embeddings", &models::bert::BertForMaskedLM::has_tied_embeddings);
-        py_mlm.def(
-            "__call__",
-            static_cast<autograd::TensorPtr (models::bert::BertForMaskedLM::*)(
-                const autograd::TensorPtr&, const autograd::TensorPtr&, const autograd::TensorPtr&)>(
-                &models::bert::BertForMaskedLM::operator()),
-            nb::arg("input_ids"),
-            nb::arg("attention_mask") = nullptr,
-            nb::arg("token_type_ids") = nullptr,
-            "BertForMaskedLM forward pass");
-
-        auto py_pretrain = static_cast<nb::class_<models::bert::BertForPreTraining, models::BaseTransformer>>(
-            py_bert_module.attr("BertForPreTraining"));
-        py_pretrain.def(nb::init<const models::bert::PreTrainingConfig&>());
-        py_pretrain.def("forward_pretraining", &models::bert::BertForPreTraining::forward_pretraining);
-
-        // PreTrainingOutput struct
-        auto py_pretrain_output = static_cast<nb::class_<models::bert::BertForPreTraining::PreTrainingOutput>>(
-            py_bert_module.attr("PreTrainingOutput"));
-        py_pretrain_output.def(nb::init<>());
-        py_pretrain_output.def_rw("mlm_logits", &models::bert::BertForPreTraining::PreTrainingOutput::mlm_logits);
-        py_pretrain_output.def_rw("nsp_logits", &models::bert::BertForPreTraining::PreTrainingOutput::nsp_logits);
-
-        // Factory functions
-        py_bert_module.def(
-            "create_for_sequence_classification",
-            &models::bert::create_for_sequence_classification,
-            "Create BERT sequence classification model");
-        py_bert_module.def(
-            "create_for_token_classification",
-            &models::bert::create_for_token_classification,
-            "Create BERT token classification model");
-        py_bert_module.def(
-            "create_for_question_answering",
-            &models::bert::create_for_question_answering,
-            "Create BERT question answering model");
-        py_bert_module.def("create_for_masked_lm", &models::bert::create_for_masked_lm, "Create BERT masked LM model");
-        py_bert_module.def(
-            "create_for_pretraining", &models::bert::create_for_pretraining, "Create BERT pretraining model");
+            "BERT forward pass");
     }
 
     {

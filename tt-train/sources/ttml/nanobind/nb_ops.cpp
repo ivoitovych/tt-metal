@@ -10,7 +10,7 @@
 #include "autograd/tensor.hpp"
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
-#include "ops/bert_losses.hpp"
+// #include "ops/bert_losses.hpp"  // Not needed for minimal reproduction
 #include "ops/binary_ops.hpp"
 #include "ops/distributed/comm_ops.hpp"
 #include "ops/dropout_op.hpp"
@@ -32,7 +32,7 @@ using namespace ttml::ops;
 void py_module_types(nb::module_& m) {
     ttml::nanobind::util::export_enum<ReduceType>(m);
 
-    m.def_submodule("bert_losses");
+    // m.def_submodule("bert_losses");  // Not needed for minimal reproduction
     m.def_submodule("binary");
     m.def_submodule("distributed");
     m.def_submodule("dropout");
@@ -181,6 +181,8 @@ void py_module(nb::module_& m) {
             nb::arg("reduce") = ReduceType::MEAN);
     }
 
+    // BERT losses not needed for minimal softmax bug reproduction
+    /*
     {
         auto py_bert_losses = static_cast<nb::module_>(m.attr("bert_losses"));
         py_bert_losses.def(
@@ -235,6 +237,7 @@ void py_module(nb::module_& m) {
             nb::arg("nsp_weight") = 1.0F,
             "Compute combined pretraining loss (MLM + NSP)");
     }
+    */
 
     {
         auto py_matmul = static_cast<nb::module_>(m.attr("matmul"));
