@@ -2,8 +2,8 @@
 
 ## Issue Reference
 - **GitHub Issue**: #30418
-- **Branch**: `ivoitovych/fix-nlp-create-qkv-heads-small-head-dim`
-- **Remote**: Push to `myfork` (NOT origin)
+- **Branch**: `ivoitovych/fix-nlp-create-qkv-heads-small-head-dim-v2`
+- **Remote**: Pushed to `myfork` (NOT origin)
 
 ## Important Note
 
