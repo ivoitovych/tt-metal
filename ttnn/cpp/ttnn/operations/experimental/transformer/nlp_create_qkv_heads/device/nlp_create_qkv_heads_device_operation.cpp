@@ -16,6 +16,17 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
     const auto input_shape = input_tensor.padded_shape();
 
     // NOTE: Checks for head_dim and shape[3] is done in nlp_create_qkv_heads because it's needed to infer head_dim
+    // Validate head_dim >= TILE_WIDTH (32)
+    // When head_dim < 32, multiple heads share a tile in the input but need separate tiles in output.
+    // This requires tile unpacking which the current kernel doesn't support.
+    // See https://github.com/tenstorrent/tt-metal/issues/30418
+    TT_FATAL(
+        operation_attributes.head_dim >= TILE_WIDTH,
+        "head_dim ({}) must be >= TILE_WIDTH ({}). head_dim < 32 is not currently supported because it requires "
+        "tile unpacking logic. See issue #30418.",
+        operation_attributes.head_dim,
+        TILE_WIDTH);
+
     TT_FATAL(
         input_tensor.storage_type() == StorageType::DEVICE,
         "Operands to TM need to be on device! {}",

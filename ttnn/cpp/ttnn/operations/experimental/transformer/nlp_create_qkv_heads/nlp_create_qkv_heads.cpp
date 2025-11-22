@@ -31,6 +31,16 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NlpCreateHeadsOperation::in
         head_dim = input_tensor_q.padded_shape()[3] / (num_q_heads + 2 * num_kv_heads_val);
     }
 
+    // Validate head_dim >= 32 (TILE_WIDTH)
+    // When head_dim < 32, multiple heads share a tile in the input but need separate tiles in output.
+    // This requires tile unpacking which the current kernel doesn't support.
+    // See https://github.com/tenstorrent/tt-metal/issues/30418
+    TT_FATAL(
+        head_dim >= 32,
+        "head_dim ({}) must be >= 32. head_dim < 32 is not currently supported because it requires "
+        "tile unpacking logic. See issue #30418.",
+        head_dim);
+
     return ttnn::prim::nlp_create_qkv_heads(
         input_tensor_q,
         input_tensor_kv,

@@ -368,6 +368,40 @@ def test_nlp_create_qkv_heads_with_program_cache(device):
     assert device.num_program_cache_entries() == 2
 
 
+@pytest.mark.parametrize(
+    "batch, seq_len, head_dim, num_q_heads, num_kv_heads",
+    (
+        (1, 32, 16, 4, 4),  # BERT-like with embedding_dim=64, num_heads=4
+        (1, 32, 8, 4, 2),  # Even smaller head_dim
+    ),
+)
+def test_nlp_create_qkv_heads_small_head_dim_validation(
+    batch,
+    seq_len,
+    head_dim,
+    num_q_heads,
+    num_kv_heads,
+    device,
+):
+    """Test that head_dim < 32 raises a validation error (issue #30418)."""
+    torch.manual_seed(1234)
+
+    in0_shape = [batch, 1, seq_len, (num_q_heads + 2 * num_kv_heads) * head_dim]
+    A = torch.randn(in0_shape)
+    in0_t = ttnn.Tensor(A, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device, ttnn.DRAM_MEMORY_CONFIG)
+
+    # Should raise TT_FATAL with message about head_dim < 32 not being supported
+    with pytest.raises(RuntimeError, match="head_dim.*must be >= TILE_WIDTH"):
+        ttnn.experimental.nlp_create_qkv_heads(
+            in0_t,
+            None,
+            num_heads=num_q_heads,
+            num_kv_heads=num_kv_heads,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+
 def run_sharded_nlp_create_qkv_heads_test(
     batch,
     seq_len,
