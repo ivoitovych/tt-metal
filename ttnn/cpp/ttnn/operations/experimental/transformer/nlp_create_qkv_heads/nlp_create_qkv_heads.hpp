@@ -12,6 +12,7 @@ namespace ttnn {
 namespace operations::experimental::transformer {
 
 struct NlpCreateHeadsOperation {
+    // Main implementation with optional_output_tensors
     static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(
         const Tensor& input_tensor_q,
         const std::optional<Tensor>& input_tensor_kv,
