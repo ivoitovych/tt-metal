@@ -127,11 +127,17 @@ void print_comparison(
 class BERTOperatorTest : public ::testing::Test {
 protected:
     void SetUp() override {
+        autograd::ctx().open_device();
         batch_size = 1;
         seq_len = 32;
         hidden_dim = 128;
         num_heads = 2;
         head_dim = hidden_dim / num_heads;
+    }
+
+    void TearDown() override {
+        autograd::ctx().reset_graph();
+        autograd::ctx().close_device();
     }
 
     uint32_t batch_size;
@@ -388,7 +394,7 @@ TEST_F(BERTOperatorTest, LayerNorm) {
     auto beta = autograd::create_tensor(beta_tensor);
 
     // Call layernorm with hardware clamp disabled
-    auto output = ops::layernorm(input, gamma, beta, eps, false);
+    auto output = ops::layernorm_moreh(input, gamma, beta, eps, false);
 
     // Verify shape
     auto output_shape = output->get_value().logical_shape();
