@@ -1,8 +1,8 @@
-# [tt-train/ops]: `ttnn::argmax` returns garbage values on Blackhole with masked sampling and unaligned tensor dimensions
+# [ttnn/ops]: `ttnn::untilize` corrupts data on Blackhole, causing argmax and other operations to fail
 
 ## Issue Metadata
 
-**Component / Area:** ops, tt-train, kernels
+**Component / Area:** ops, kernels, data movement
 
 **Issue Type:** Incorrect output / Data corruption
 
@@ -10,26 +10,33 @@
 
 ### Observed
 
-The `TrivialTnnFixedTest.TestSamplingPositiveTemperatureWithMask` test fails on Blackhole hardware, returning garbage values instead of valid argmax indices.
+**Root Cause Identified: `ttnn::untilize` corrupts tensor data on Blackhole.**
 
-The test creates a tensor with shape `{1, 1, 32, 65}` (note: last dimension 65 is not aligned to tile boundary of 32), applies a mask to the last column, and calls `ttml::ttnn_fixed::sample()` which internally uses `ttnn::argmax` after `ttnn::untilize`.
+The `TrivialTnnFixedTest.TestSamplingPositiveTemperatureWithMask` test fails because `ttnn::untilize` produces corrupted output. Debug testing shows the data corruption pattern:
 
-**Actual output:**
+**Input tensor (TILE layout) with sequential values:**
 ```
-Expected: (v) < (64), actual: 3201515335 vs 64
-Expected: (v) < (64), actual: 3217342221 vs 64
-Expected: (v) < (64), actual: 1066712917 vs 64
-Expected: (v) < (64), actual: 3200859828 vs 64
-...
+Row 0: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, ...
+Row 1: 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, ...
+Row 2: 200, 201, 202, 203, 204, 205, 206, 207, 208, 209, ...
+Row 3: 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, ...
 ```
 
-The returned values (3201515335, 3217342221, etc.) appear to be garbage/uninitialized memory or incorrectly interpreted float bit patterns cast to `uint32_t`. Valid argmax indices should be in range `[0, 63]` since the last column (index 64) is masked.
+**After `ttnn::untilize` (ROW_MAJOR layout) - CORRUPTED:**
+```
+Row 0: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, ...           (CORRECT)
+Row 1: 100, 101, 102, 103, 104, 105, 106, 107, ... (CORRECT)
+Row 2: 200, 201, 202, 203, 204, 205, 206, 207, 208, 209, ... 260, 260, 262, 264, 264 (CORRUPTED)
+Row 3: 300, 300, 302, 304, 304, 304, 306, 308, 308, 308, ... (CORRUPTED - odd indices skipped, even duplicated)
+```
+
+**Corruption pattern:** Odd indices are skipped and even indices are duplicated in later rows. This occurs even for aligned dimensions (width=64), not just unaligned (width=65).
+
+This causes downstream operations like `argmax` to return garbage values because they operate on corrupted data.
 
 ### Expected
 
-The test should pass, returning valid argmax indices in range `[0, 63]`, as it does on Wormhole hardware.
-
-A similar test `TestSamplingPositiveTemperatureNoMask` with shape `{1, 1, 32, 64}` (aligned last dimension, no mask) passes on both architectures.
+`ttnn::untilize` should preserve tensor data exactly when converting from TILE to ROW_MAJOR layout, as it does on Wormhole hardware.
 
 ## Steps to Reproduce the Issue
 
@@ -44,28 +51,48 @@ cd $TT_METAL_HOME/tt-train
 cmake -DCMAKE_BUILD_TYPE=Debug -B build -GNinja
 cmake --build build --config Debug
 
-# Run the failing test
+# Run the focused untilize tests (minimal reproduction)
 cd $TT_METAL_HOME
-./tt-train/build/tests/ttml_tests --gtest_filter="TrivialTnnFixedTest.TestSamplingPositiveTemperatureWithMask"
+./tt-train/build/tests/ttml_tests --gtest_filter="DebugArgmaxTest.UntilizeOnly*"
 
-# Run the full test group to see passing vs failing
-./tt-train/build/tests/ttml_tests --gtest_filter="TrivialTnnFixedTest.*"
+# Run the original failing test
+./tt-train/build/tests/ttml_tests --gtest_filter="TrivialTnnFixedTest.TestSamplingPositiveTemperatureWithMask"
 ```
 
 ### 2. Input data / link or description
 
-The test is self-contained in:
-`tt-train/tests/ttnn_fixed/trivial_ttnn_ops_test.cpp:277-298`
+**Minimal reproduction test** in `tt-train/tests/ttnn_fixed/debug_argmax_test.cpp`:
 
-Test creates:
-- Input tensor: shape `{1, 1, 32, 65}`, random float values
-- Mask tensor: shape `{1, 1, 32, 65}`, zeros except last column set to `1e4`
-- Calls `ttml::ttnn_fixed::sample(tensor_a, 1.0F, 42, tensor_mask)`
+```cpp
+TEST_F(DebugArgmaxTest, UntilizeOnly65) {
+    auto* device = &ttml::autograd::ctx().get_device();
 
-The `sample` function in `tt-train/sources/ttml/ttnn_fixed/trivial_ttnn_ops.cpp:79-112`:
-1. Applies Gumbel sampling trick with random values
-2. Subtracts the mask from logits
-3. Returns `ttnn::argmax(ttnn::untilize(out), 3, true, std::nullopt, true)`
+    // Shape {1, 1, 4, 65}
+    xt::xarray<float>::shape_type shape = {1, 1, 4, 65};
+    xt::xarray<float> a = xt::zeros<float>(shape);
+
+    // Set known sequential values
+    for (size_t row = 0; row < 4; ++row) {
+        for (size_t col = 0; col < 65; ++col) {
+            a(0, 0, row, col) = static_cast<float>(row * 100 + col);
+        }
+    }
+
+    auto tensor_a = ttml::core::from_xtensor(a, device);  // Creates TILE layout
+    auto untilized = ttnn::untilize(tensor_a);            // CORRUPTS DATA on Blackhole
+    auto vec = ttml::core::to_vector(untilized);
+
+    // Check data integrity - FAILS on Blackhole
+    for (size_t row = 0; row < 4; ++row) {
+        for (size_t col = 0; col < 65; ++col) {
+            float expected = static_cast<float>(row * 100 + col);
+            EXPECT_NEAR(vec[row * 65 + col], expected, 0.1f);
+        }
+    }
+}
+```
+
+**Original failing test** in `tt-train/tests/ttnn_fixed/trivial_ttnn_ops_test.cpp:277-298`
 
 ### 3. Frequency
 
@@ -157,21 +184,44 @@ Expected: (v) < (64), actual: 1058192921 vs 64
 
 ### Impact
 
-- **Affected workflows:** tt-train sampling operations with masks on Blackhole, inference with masked token sampling
-- **Affected users:** Developers using tt-train on Blackhole hardware
-- **Release or date risk:** Blocks tt-train validation on Blackhole
+- **Affected workflows:** ANY operation using `ttnn::untilize` on Blackhole (TILE→ROW_MAJOR conversion), including but not limited to: sampling, argmax after tiled ops, data inspection/export
+- **Affected users:** All developers using ttnn operations on Blackhole hardware
+- **Release or date risk:** Blocks Blackhole validation for any workflow requiring untilize
 
 ## Analysis Notes
 
-The key differences between the passing and failing tests:
+### Root Cause Identified
 
-| Test | Shape | Mask | Result |
-|------|-------|------|--------|
-| `TestSamplingPositiveTemperatureNoMask` | `{1,1,32,64}` | No | PASS |
-| `TestSamplingPositiveTemperatureWithMask` | `{1,1,32,65}` | Yes | FAIL |
+**The bug is in `ttnn::untilize` on Blackhole, NOT in argmax or the mask operation.**
 
-Potential root causes to investigate:
-1. **Unaligned tensor dimension:** The last dimension (65) is not a multiple of 32, which may cause alignment issues in NOC transactions or circular buffer operations on Blackhole
-2. **Untilize + argmax pipeline:** The `ttnn::untilize` followed by `ttnn::argmax` may have Blackhole-specific issues with row-major data
-3. **Memory alignment differences:** Blackhole has different DRAM/L1 alignment requirements (`hal::get_dram_alignment()`) that may affect the multi-core argmax kernel
-4. **Mask subtraction operation:** The `ttnn::subtract` with the mask tensor may produce incorrect values on Blackhole that then cause argmax to fail
+Debug testing confirmed:
+1. `ArgmaxUnaligned65NoUntilize` - **PASSES** - argmax works correctly when data is already in ROW_MAJOR layout
+2. `UntilizeOnly64` - **FAILS** - even aligned dimensions show corruption in later rows
+3. `UntilizeOnly65` - **FAILS** - data corruption in rows 2+
+4. `UntilizeOnly33` - **FAILS** - data corruption in rows 2+
+
+### Data Corruption Pattern
+
+The corruption shows a specific pattern suggesting stride/address calculation errors:
+- **Odd indices are skipped**
+- **Even indices are duplicated**
+- **First 1-2 rows are often correct, later rows are corrupted**
+
+Example (width=64, row 3):
+```
+Expected: 300, 301, 302, 303, 304, 305, 306, 307, 308, 309
+Actual:   300, 300, 302, 304, 304, 304, 306, 308, 308, 308
+```
+
+### Likely Root Cause
+
+The pattern (reading every other value twice) suggests:
+1. **Incorrect face/subtile width calculation** for Blackhole architecture
+2. **Address stride error** in the untilize kernel when reading TILE format data
+3. **Possible 16-bit vs 32-bit stride confusion** in data movement
+
+### Files to Investigate
+
+- `ttnn/cpp/ttnn/operations/data_movement/untilize/device/` - untilize kernel implementation
+- Blackhole-specific TILE layout parameters vs Wormhole
+- Face width and subtile dimensions for Blackhole architecture
