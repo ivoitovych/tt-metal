@@ -36,6 +36,7 @@ set(SOURCES
     optimizers/sgd_fused_test.cpp
     optimizers/no_op_test.cpp
     modules/distributed/linear_test.cpp
+    modules/test_isolation_repro.cpp
     serialization/model_serializer_test.cpp
     serialization/flatbuffer_serializer_test.cpp
     serialization/tensor_serializer_test.cpp

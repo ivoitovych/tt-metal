@@ -194,6 +194,29 @@ Potential causes:
 
 ---
 
+## Reproduction Test (Independent of BERT Branch)
+
+A standalone reproduction test was created to verify the test isolation pattern on main:
+`tt-train/tests/modules/test_isolation_repro.cpp`
+
+**Result:** All 5 reproduction tests PASS on main-403df4beb0, confirming that:
+1. The test isolation infrastructure works correctly on main
+2. The issue is specific to the BERT branch code (epsilon parameter functionality)
+3. The bug is in how the BERT branch LayerNormLayer with epsilon parameters interacts with the autograd context
+
+```
+[==========] Running 5 tests from 1 test suite.
+[  PASSED  ] TestIsolationRepro.HeavyTensorOperations
+[  PASSED  ] TestIsolationRepro.MultipleDeviceCycles
+[  PASSED  ] TestIsolationRepro.SimpleModuleCreation
+[  PASSED  ] TestIsolationRepro.GraphOperations
+[  PASSED  ] TestIsolationRepro.ContextStateVerification
+[==========] 5 tests from 1 test suite ran. (2133 ms total)
+[  PASSED  ] 5 tests.
+```
+
+---
+
 ## Date
 
 2025-12-15
