@@ -313,6 +313,43 @@ TEST_F(DebugUntilizeTest, UntilizeOnly64) {
     EXPECT_TRUE(all_correct) << "Untilize should work for aligned tensor dimensions";
 }
 
+// Test for 8 rows to check corruption pattern
+TEST_F(DebugUntilizeTest, UntilizeOnly8Rows) {
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    // Shape {1, 1, 8, 64} - 8 rows
+    xt::xarray<float>::shape_type shape = {1, 1, 8, 64};
+    xt::xarray<float> a = xt::zeros<float>(shape);
+
+    // Set known values
+    for (size_t row = 0; row < 8; ++row) {
+        for (size_t col = 0; col < 64; ++col) {
+            a(0, 0, row, col) = static_cast<float>(row * 100 + col);
+        }
+    }
+
+    auto tensor_a = ttml::core::from_xtensor(a, device);
+    auto untilized = ttnn::untilize(tensor_a);
+    auto vec = ttml::core::to_vector(untilized);
+
+    // Check each row's data
+    bool all_correct = true;
+    for (size_t row = 0; row < 8; ++row) {
+        std::cout << "UntilizeOnly8Rows Row " << row << " first 10: ";
+        for (size_t col = 0; col < 10; ++col) {
+            float expected = static_cast<float>(row * 100 + col);
+            float actual = vec[row * 64 + col];
+            std::cout << actual << " ";
+            if (std::fabs(actual - expected) > 0.1f) {
+                all_correct = false;
+            }
+        }
+        std::cout << std::endl;
+    }
+
+    EXPECT_TRUE(all_correct) << "Untilize corrupted data for 8 rows";
+}
+
 // Test 9: Untilize with 33 width
 TEST_F(DebugUntilizeTest, UntilizeOnly33) {
     auto* device = &ttml::autograd::ctx().get_device();

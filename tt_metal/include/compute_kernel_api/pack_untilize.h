@@ -66,7 +66,7 @@ ALWI void pack_untilize_dest_init(uint32_t ocb, uint32_t face_r_dim = 16, uint32
     // A workaround for tt-metal#17132. Should be addressed more systematically.
     PACK(
         (llk_pack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE, false /*untilize*/>(ocb, face_r_dim, num_faces)));
-    PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim, false, narrow_row, row_num_datums>(
+    PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim, false, narrow_row, row_num_datums, DST_ACCUM_MODE>(
         ocb, face_r_dim, num_faces)));
     PACK((llk_init_packer_dest_offset_registers<true, false>()));
 }
@@ -149,7 +149,8 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb,
         MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
 
         PACK((llk_packer_wait_for_math_done()));
-        PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(1 /*num_blocks*/, ocb, FACE_R_DIM, 4, block_c_index)));
+        PACK((llk_pack_untilize<block_ct_dim, full_ct_dim, false, false, TILE_C_DIM, 0, DST_ACCUM_MODE>(
+            1 /*num_blocks*/, ocb, FACE_R_DIM, 4, block_c_index)));
         PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
     }
 }
@@ -200,8 +201,14 @@ ALWI void pack_untilize_dest(
     uint32_t face_r_dim = 16,
     uint32_t num_faces = 4,
     uint32_t tile_dst_rt_offset = 0) {
-    PACK((llk_pack_untilize<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
-        block_rt_dim, ocb, face_r_dim, num_faces, block_c_index, tile_dst_rt_offset)));
+    PACK((llk_pack_untilize<
+          block_ct_dim,
+          full_ct_dim,
+          diagonal,
+          narrow_row,
+          row_num_datums,
+          tile_dst_ct_offset,
+          DST_ACCUM_MODE>(block_rt_dim, ocb, face_r_dim, num_faces, block_c_index, tile_dst_rt_offset)));
 }
 
 // clang-format off

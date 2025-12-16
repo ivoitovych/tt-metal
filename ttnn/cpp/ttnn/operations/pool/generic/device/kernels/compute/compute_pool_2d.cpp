@@ -286,8 +286,13 @@ void MAIN {
                         // need this on BH to set swizzle bit before pack untilize dest
                         MATH((llk_math_hw_configure_disaggregated<true, true>(0, 0)));
 #endif
-                        PACK((llk_pack_untilize_init<max_tiles_per_iter, max_tiles_per_iter, false, false, TILE_C_DIM>(
-                            pre_tilize_cb_id, 1, num_faces_in_output_tile)));
+                        PACK((llk_pack_untilize_init<
+                              max_tiles_per_iter,
+                              max_tiles_per_iter,
+                              false,
+                              false,
+                              TILE_C_DIM,
+                              DST_ACCUM_MODE>(pre_tilize_cb_id, 1, num_faces_in_output_tile)));
                     }
                 } else {
                     // ROW_MAJOR output: pack directly to output CB
