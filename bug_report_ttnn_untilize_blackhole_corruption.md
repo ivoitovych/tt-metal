@@ -472,6 +472,8 @@ tt-metal/tt-train/tests/ttnn_fixed/debug_untilize_test.cpp
 ```
 
 ### Build and Test Commands
+
+**Option 1: Full tt-metal build** (slower, builds entire stack)
 ```bash
 # Build
 ./build_metal.sh -b Release --build-tt-train
@@ -479,6 +481,18 @@ tt-metal/tt-train/tests/ttnn_fixed/debug_untilize_test.cpp
 # Run tests
 ./build_Release/tt-train/tests/ttml_tests --gtest_filter="DebugUntilizeTest.*"
 ./build_Release/tt-train/tests/ttml_tests --gtest_filter="TrivialTnnFixedTest.TestSamplingPositiveTemperatureWithMask"
+```
+
+**Option 2: Standalone tt-train build** (faster, especially with ccache)
+```bash
+# Build
+cd tt-train
+cmake -DCMAKE_BUILD_TYPE=Release -B build -GNinja
+cmake --build build
+
+# Run tests
+./tt-train/build/tests/ttml_tests --gtest_filter="DebugUntilizeTest.*"
+./tt-train/build/tests/ttml_tests --gtest_filter="TrivialTnnFixedTest.TestSamplingPositiveTemperatureWithMask"
 ```
 
 ### Git Information
