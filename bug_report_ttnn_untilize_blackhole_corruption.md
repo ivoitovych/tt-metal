@@ -1,11 +1,11 @@
 # Bug Report: ttnn::untilize Data Corruption on Blackhole P150
 
-**Status**: OPEN - Under Investigation
+**Status**: BLOCKED - Requires Tenstorrent HW Engineer
 **Severity**: Critical
 **Component**: tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_pack_untilize.h
 **Hardware**: Blackhole P150
 **Branch**: `ivoitovych/tt-train-untilize-blackhole-bug-2`
-**Date**: 2025-12-16
+**Date**: 2025-12-17 (Updated)
 
 ---
 
@@ -13,7 +13,12 @@
 
 The `ttnn::untilize` operation produces corrupted output data when converting tensors from TILE layout to ROW_MAJOR layout on Blackhole P150 hardware. The corruption manifests as a progressive "read even, skip odd" pattern starting at row 3, with severity increasing for later rows. This bug does **not** occur on Wormhole hardware.
 
-Multiple fix attempts targeting different aspects of the LLK packer implementation have been unsuccessful. A critical finding is that **both DST_ACCESS_STRIDED_MODE and DST_ACCESS_NORMAL_MODE produce identical corruption patterns**, suggesting the root cause lies elsewhere in the packer configuration or hardware.
+**CRITICAL BLOCKER (2025-12-17)**: All reasonable software approaches have been exhausted. Attempting to port the working Wormhole implementation to Blackhole **causes the device to hang**. The investigation is now blocked and requires Tenstorrent hardware engineer involvement.
+
+Key findings:
+1. **`program_packer_untilized_destination` is EMPTY on Blackhole** - the entire function body is commented out
+2. **Both DST_ACCESS_STRIDED_MODE and DST_ACCESS_NORMAL_MODE produce identical corruption** - ruling out DST access mode as the cause
+3. **Wormhole-style port causes device hang** - Blackhole packer architecture is fundamentally different
 
 ---
 
@@ -115,12 +120,15 @@ TEST(UntilizeBug, MinimalRepro) {
 
 | Property | Value |
 |----------|-------|
-| Hardware | Blackhole P150 |
-| Host OS | Linux 5.15.0-164-generic |
+| Hardware | Blackhole P150 (PCI device 1e52:b140) |
+| Host OS | Ubuntu 22.04.5 LTS, Kernel 5.15.0-164-generic |
 | Machine | vm3 |
 | Firmware | 19.3.0 |
 | ETH FW | 1.7.1 |
+| KMD version | 2.6.1 |
+| tt-smi version | 3.0.39 |
 | tt-metal branch | `ivoitovych/tt-train-untilize-blackhole-bug-2` |
+| Original commit | `403df4beb0f31a2b771349e58a02a98d859b9039` (when bug was discovered) |
 
 ---
 
@@ -331,6 +339,20 @@ This missing configuration is likely a significant contributor to the corruption
 - **Result**: Various corruption patterns, none correct
 - **Status**: Reverted
 
+### Attempt 7 (2025-12-17): Full Wormhole-style port - DEVICE HUNG
+- **Changes**:
+  - **Enabled `program_packer_untilized_destination`**: Uncommented and adapted the function body in `cpack_common.h`. Added high bit for L1 validity flag, set up all 4 OUTPUT_ADDR registers with proper offsets, wrote all 4 THCON registers.
+  - **Updated replay buffer**: Changed from 4 to 12 instructions. Added updates for OUTPUT_ADDR+0 through OUTPUT_ADDR+3. Added WRCFG for all 4 THCON L1 destination registers.
+  - **Changed MOP structure**: Changed from outer=rows, inner=tiles to outer=tiles, inner=1. Added explicit C++ row iteration in `_llk_pack_untilize_`. Added Wormhole-style address modifiers (y_src.incr=15).
+  - **Updated API wrapper**: Changed `_llk_pack_untilize_init_` call in `llk_pack_api.h` to match new signature.
+- **Files Modified**:
+  - `tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/cpack_common.h`
+  - `tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_pack_untilize.h`
+  - `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_pack_api.h`
+- **Result**: **DEVICE HUNG** - test execution hung requiring process kill
+- **Conclusion**: Blackhole packer hardware has fundamentally different constraints than Wormhole. Direct port is not viable.
+- **Status**: All changes reverted using `git restore`
+
 ---
 
 ## Key Findings
@@ -359,6 +381,15 @@ The `program_packer_untilized_destination` function is completely non-functional
 | PACR format | 7 parameters | 12 parameters |
 | PACK_SEL macro | Available | **NOT available** |
 | `program_packer_untilized_destination` | Functional | **Empty/commented out** |
+
+### Finding 6 (2025-12-17): Wormhole-Style Port Causes Device Hang
+Attempting a comprehensive port of the Wormhole implementation to Blackhole resulted in the device hanging during test execution. This was attempted with:
+- Enabling `program_packer_untilized_destination` (uncommenting function body)
+- Updating replay buffer to configure all 4 L1 destination registers
+- Changing MOP structure to match Wormhole (explicit row iteration)
+- Configuring Wormhole-style address modifiers
+
+**Conclusion**: The Blackhole packer hardware has fundamentally different constraints than Wormhole. The Wormhole approach cannot be directly ported. **This investigation is now BLOCKED** and requires Tenstorrent hardware engineer involvement.
 
 ---
 
@@ -421,36 +452,43 @@ addr_mod_pack_t {
 
 ## Recommendations
 
-### Immediate Actions
+### Status: BLOCKED - Requires Escalation
 
-1. **Implement `program_packer_untilized_destination` for Blackhole**
-   - Uncomment and adapt the code in `cpack_common.h`
-   - Verify register names/offsets for Blackhole architecture
-   - Test with both STRIDED and NORMAL modes
+**All reasonable software approaches have been exhausted.** The following have been tried and failed:
+- DST access mode changes (both STRIDED and NORMAL produce identical corruption)
+- MEGAROW parameter adjustments
+- Address modifier configuration changes
+- Full Wormhole-style port (causes device hang)
 
-2. **Align Address Modifier Configuration**
-   - Configure ADDR_MOD_0, ADDR_MOD_1, ADDR_MOD_2 similar to Wormhole
-   - Pay attention to y_src increment values for face transitions
+### Required Actions (Escalation)
 
-3. **Review MOP Loop Structure**
-   - Consider switching to Wormhole-style explicit row iteration
-   - May require significant refactoring of the MOP template
+1. **File Bug with Tenstorrent LLK/Hardware Team** (Priority: HIGH)
+   - The `program_packer_untilized_destination` function is completely empty on Blackhole
+   - The Wormhole approach cannot be directly ported without causing device hang
+   - Request documentation on Blackhole-specific packer architecture differences
+   - Request guidance on how untilize should be implemented for Blackhole
 
-### Escalation Path
+2. **Request Blackhole Packer Documentation**
+   - Need to understand why Blackhole uses a different approach than Wormhole
+   - Need to understand what constraints prevent Wormhole-style port
+   - Need to understand correct L1 destination address setup for Blackhole
 
-If the above fixes don't resolve the issue:
+3. **Request Tenstorrent Engineer to Implement Fix**
+   - This requires deep hardware knowledge that is not publicly documented
+   - The fix likely requires understanding of Blackhole-specific packer registers and timing
 
-1. **File Bug with LLK Team**
-   - The tt_llk repository is a git submodule
-   - LLK team has deeper knowledge of packer hardware
+### Potential Workarounds (Temporary)
 
-2. **Hardware Team Consultation**
-   - Corruption pattern suggests possible HW bug
-   - May need firmware update or hardware workaround
+1. **Use Wormhole hardware if available**
+   - The untilize operation works correctly on Wormhole (N150, N300, etc.)
 
-3. **Alternative Implementation**
-   - Consider using a different untilize path (e.g., data movement instead of packer)
-   - May have performance implications
+2. **Avoid untilize on Blackhole**
+   - Keep data in TILE layout where possible
+   - Use alternative data movement operations if available
+
+3. **Software emulation** (not recommended for performance)
+   - Implement untilize as explicit data copy operations
+   - Would have significant performance overhead
 
 ---
 
@@ -458,13 +496,25 @@ If the above fixes don't resolve the issue:
 
 ### Key Files
 
+**LLK (Low-Level Kernel) Layer - Where the bug manifests:**
 | File | Purpose |
 |------|---------|
 | `tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_pack_untilize.h` | Main Blackhole implementation |
 | `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_pack_untilize.h` | Working Wormhole reference |
-| `tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/cpack_common.h` | Packer common functions |
+| `tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/cpack_common.h` | Packer common functions (program_packer_untilized_destination is EMPTY here) |
 | `tt_metal/include/compute_kernel_api/pack_untilize.h` | API layer |
-| `tt-train/tests/ttnn_fixed/debug_untilize_test.cpp` | Debug test suite |
+
+**TTNN Layer - Higher-level untilize operation:**
+| File | Purpose |
+|------|---------|
+| `ttnn/cpp/ttnn/operations/data_movement/untilize/device/` | TTNN untilize kernel implementation |
+| `ttnn/cpp/ttnn/operations/data_movement/untilize/untilize.cpp` | TTNN untilize operation entry point |
+
+**Test Files:**
+| File | Purpose |
+|------|---------|
+| `tt-train/tests/ttnn_fixed/debug_untilize_test.cpp` | Debug test suite for isolation |
+| `tt-train/tests/ttnn_fixed/trivial_ttnn_ops_test.cpp` | Original failing test (line 277-298) |
 
 ### Test File Location
 ```
@@ -502,6 +552,27 @@ Repository: tenstorrent/tt-metal
 Submodule: tt_metal/third_party/tt_llk (separate repo)
 ```
 
+### Original Test Error Output
+
+The original failing test (`TestSamplingPositiveTemperatureWithMask`) produced these garbage argmax values due to untilize corruption:
+
+```
+/home/ivoitovych/tt/tt-metal/tt-train/tests/ttnn_fixed/trivial_ttnn_ops_test.cpp:296: Failure
+Expected: (v) < (64), actual: 3201515335 vs 64
+Expected: (v) < (64), actual: 3217342221 vs 64
+Expected: (v) < (64), actual: 1066712917 vs 64
+Expected: (v) < (64), actual: 3200859828 vs 64
+Expected: (v) < (64), actual: 3202563797 vs 64
+Expected: (v) < (64), actual: 3207970364 vs 64
+Expected: (v) < (64), actual: 3217375136 vs 64
+Expected: (v) < (64), actual: 3204431830 vs 64
+Expected: (v) < (64), actual: 1072873412 vs 64
+Expected: (v) < (64), actual: 3207184383 vs 64
+Expected: (v) < (64), actual: 1058192921 vs 64
+```
+
+These values (e.g., 3201515335) are the result of argmax operating on corrupted untilized data, where BFloat16 values were incorrectly packed, causing argmax to return indices outside the valid range.
+
 ---
 
 ## Revision History
@@ -510,3 +581,4 @@ Submodule: tt_metal/third_party/tt_llk (separate repo)
 |------|--------|---------|
 | 2025-12-15 | Investigation Team | Initial discovery and Phase 1-2 analysis |
 | 2025-12-16 | Investigation Team | Fix attempts 4-6, comprehensive documentation |
+| 2025-12-17 | Investigation Team | **Attempt 7 (Wormhole-style port) - DEVICE HUNG**. Investigation now BLOCKED. Updated status and recommendations for escalation. |
