@@ -1,11 +1,11 @@
 # Bug Report: ttnn::untilize Data Corruption on Blackhole P150
 
-**Status**: BLOCKED - Requires Tenstorrent HW Engineer
+**Status**: WORKAROUND FOUND - Still requires fix for performance
 **Severity**: Critical
 **Component**: tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_pack_untilize.h
 **Hardware**: Blackhole P150
 **Branch**: `ivoitovych/tt-train-untilize-blackhole-bug-2`
-**Date**: 2025-12-17 (Updated)
+**Date**: 2025-12-17 (Updated - Session 5)
 
 ---
 
@@ -13,12 +13,15 @@
 
 The `ttnn::untilize` operation produces corrupted output data when converting tensors from TILE layout to ROW_MAJOR layout on Blackhole P150 hardware. The corruption manifests as a progressive "read even, skip odd" pattern starting at row 3, with severity increasing for later rows. This bug does **not** occur on Wormhole hardware.
 
-**CRITICAL BLOCKER (2025-12-17)**: All reasonable software approaches have been exhausted. Attempting to port the working Wormhole implementation to Blackhole **causes the device to hang**. The investigation is now blocked and requires Tenstorrent hardware engineer involvement.
+**WORKAROUND AVAILABLE (2025-12-17)**: A working workaround has been found! Use `ttnn::untilize(tensor, std::nullopt, true, false)` (set `use_pack_untilize=false`) to use the slow path which produces correct results.
 
 Key findings:
-1. **`program_packer_untilized_destination` is EMPTY on Blackhole** - the entire function body is commented out
-2. **Both DST_ACCESS_STRIDED_MODE and DST_ACCESS_NORMAL_MODE produce identical corruption** - ruling out DST access mode as the cause
-3. **Wormhole-style port causes device hang** - Blackhole packer architecture is fundamentally different
+1. **WORKAROUND FOUND**: The "slow path" (`use_pack_untilize=False`) uses `llk_unpack_untilize` + regular `llk_pack` instead of `llk_pack_untilize` and produces correct results
+2. **BFloat16 precision was masking the real bug**: Initial "corruption" pattern (300→300, 301→300) was actually BFloat16 precision loss, not corruption
+3. **Real bug (Float32)**: Fast path shows face interleaving corruption - data from adjacent rows incorrectly mixed into wrong face positions
+4. **Second bug identified**: `ttnn::argmax` fails on untilized tensors for rows ≥ 21 (separate issue)
+5. **`program_packer_untilized_destination` is EMPTY on Blackhole** - the entire function body is commented out
+6. **Both DST_ACCESS_STRIDED_MODE and DST_ACCESS_NORMAL_MODE produce identical corruption** - ruling out DST access mode as the cause
 
 ---
 
@@ -133,6 +136,8 @@ TEST(UntilizeBug, MinimalRepro) {
 ---
 
 ## Corruption Pattern Analysis
+
+**Note (Session 5)**: The pattern below was observed with BFloat16 data and was initially attributed to untilize corruption. However, investigation revealed this is actually **BFloat16 precision loss** (odd values rounding to even), NOT corruption. See [Session 5: Workaround Discovery](#session-5-workaround-discovery-2025-12-17) for the actual Float32 corruption pattern (face interleaving).
 
 ### Input Data (Sequential Values)
 ```
@@ -355,6 +360,90 @@ This missing configuration is likely a significant contributor to the corruption
 
 ---
 
+## Session 5: Workaround Discovery (2025-12-17)
+
+### BFloat16 Precision Masking the Real Bug
+
+The original "corruption" pattern observed with BFloat16 data was **NOT actually corruption** - it was BFloat16 precision loss:
+- BFloat16 has 7 mantissa bits
+- For values 256-512, precision is ~2 units
+- Odd numbers round to nearest even: 301→300, 303→304, etc.
+
+This was masking the real untilize bug. Testing with Float32 reveals the actual issue.
+
+### REAL pack_untilize Bug (Float32)
+
+With Float32, the fast path (`use_pack_untilize=True`) shows **face interleaving corruption**:
+
+```
+Expected Row 0: [0-15], [16-31], [32-47], [48-63]
+Actual Row 0:   [0-15], [100-115], [32-47], [132-147]
+```
+
+- Face pairs from adjacent rows are being incorrectly interleaved
+- Rows 3 and 7 have ZEROS in second half (data missing)
+- 288 out of 512 values incorrect in 8x64 tensor test
+
+### WORKAROUND: Slow Path Works!
+
+**`ttnn::untilize(tensor, std::nullopt, true, false)` produces CORRECT results!**
+
+Test with 8x64 Float32 tensor:
+- Fast path (`use_pack_untilize=true`): 288/512 mismatches
+- Slow path (`use_pack_untilize=false`): **0/512 mismatches**
+
+The slow path uses `llk_unpack_untilize` + regular `llk_pack` instead of the buggy `llk_pack_untilize`.
+
+### C++ API Usage
+
+```cpp
+// CORRECT: Use slow path on Blackhole
+auto untilized = ttnn::untilize(tensor, std::nullopt, true, false);
+//                                       memory_config, multicore, use_pack_untilize=FALSE
+
+// BUGGY: Default fast path (corrupts data on Blackhole)
+auto untilized = ttnn::untilize(tensor);  // use_pack_untilize defaults to true
+```
+
+### Python API Usage
+
+```python
+# CORRECT: Use slow path on Blackhole
+untilized = ttnn.untilize(tensor, use_pack_untilize=False)
+
+# BUGGY: Default fast path
+untilized = ttnn.untilize(tensor)  # use_pack_untilize defaults to True
+```
+
+### SECOND BUG: Argmax on Untilized Tensor
+
+Even when untilize produces correct data, `ttnn::argmax` fails for rows ≥ 21:
+
+```
+Untilized data: All correct (verified by reading to CPU)
+Argmax results: [10,10,10...10,10,0,0,0,0,0,0,0,0,0,0,0]
+                         ↑ rows 0-20 correct, rows 21-31 wrong
+```
+
+**WORKAROUND**: Round-trip through CPU fixes argmax:
+```python
+# Python - round-trip through CPU
+data = ttnn.to_torch(untilized_tensor)
+fresh = ttnn.from_torch(data, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+result = ttnn.argmax(fresh, ...)  # Now works correctly for all rows
+```
+
+```cpp
+// C++ - round-trip through CPU using ttml helpers
+auto vec = ttml::core::to_vector(untilized_tensor);
+auto fresh = ttml::core::from_vector(vec, shape, device, ttnn::Layout::ROW_MAJOR);
+auto result = ttnn::argmax(fresh, ...);  // Now works correctly for all rows
+```
+
+This second bug appears to be related to tensor metadata or internal state after untilize, not the actual data values.
+
+---
+
 ## Key Findings
 
 ### Finding 1: DST Access Mode is NOT the Root Cause
@@ -452,43 +541,53 @@ addr_mod_pack_t {
 
 ## Recommendations
 
-### Status: BLOCKED - Requires Escalation
+### Status: WORKAROUND AVAILABLE
 
-**All reasonable software approaches have been exhausted.** The following have been tried and failed:
-- DST access mode changes (both STRIDED and NORMAL produce identical corruption)
-- MEGAROW parameter adjustments
-- Address modifier configuration changes
-- Full Wormhole-style port (causes device hang)
+A working workaround has been found! The fast path bug still needs to be fixed for performance, but production code can use the slow path.
 
-### Required Actions (Escalation)
+### Immediate Workaround
 
-1. **File Bug with Tenstorrent LLK/Hardware Team** (Priority: HIGH)
+**Use `use_pack_untilize=false` in all `ttnn::untilize` calls on Blackhole:**
+
+```cpp
+// C++
+auto untilized = ttnn::untilize(tensor, std::nullopt, true, false);
+```
+
+```python
+# Python
+untilized = ttnn.untilize(tensor, use_pack_untilize=False)
+```
+
+This uses the slow path (`llk_unpack_untilize` + regular `llk_pack`) which produces correct results.
+
+### Performance Impact
+
+The slow path has higher latency than the optimized `llk_pack_untilize` fast path. For performance-critical applications, the fast path bug should still be fixed. Consider making `use_pack_untilize=False` the **default for Blackhole** until the fast path is fixed.
+
+### Required Actions (Still Needed for Performance Fix)
+
+1. **File Bug with Tenstorrent LLK/Hardware Team** (Priority: MEDIUM - workaround available)
    - The `program_packer_untilized_destination` function is completely empty on Blackhole
    - The Wormhole approach cannot be directly ported without causing device hang
    - Request documentation on Blackhole-specific packer architecture differences
-   - Request guidance on how untilize should be implemented for Blackhole
+   - Request guidance on how `llk_pack_untilize` should be implemented for Blackhole
 
-2. **Request Blackhole Packer Documentation**
-   - Need to understand why Blackhole uses a different approach than Wormhole
-   - Need to understand what constraints prevent Wormhole-style port
-   - Need to understand correct L1 destination address setup for Blackhole
+2. **Consider Platform-Specific Default**
+   - Make `use_pack_untilize=False` the default for Blackhole hardware
+   - Keep `use_pack_untilize=True` as default for Wormhole where it works correctly
 
-3. **Request Tenstorrent Engineer to Implement Fix**
-   - This requires deep hardware knowledge that is not publicly documented
-   - The fix likely requires understanding of Blackhole-specific packer registers and timing
+3. **Investigate Second Bug (argmax on untilized tensors)**
+   - `ttnn::argmax` fails on untilized tensors for rows ≥ 21
+   - Appears to be tensor metadata/internal state issue, not data corruption
+   - File separate bug report for this issue
 
-### Potential Workarounds (Temporary)
+### Summary of Bugs Identified
 
-1. **Use Wormhole hardware if available**
-   - The untilize operation works correctly on Wormhole (N150, N300, etc.)
-
-2. **Avoid untilize on Blackhole**
-   - Keep data in TILE layout where possible
-   - Use alternative data movement operations if available
-
-3. **Software emulation** (not recommended for performance)
-   - Implement untilize as explicit data copy operations
-   - Would have significant performance overhead
+| Bug | Description | Workaround |
+|-----|-------------|------------|
+| pack_untilize corruption | Face interleaving corruption on Blackhole fast path | Use `use_pack_untilize=False` |
+| argmax on untilized | Fails for rows ≥ 21 on untilized tensors | Round-trip through CPU |
 
 ---
 
@@ -581,4 +680,5 @@ These values (e.g., 3201515335) are the result of argmax operating on corrupted 
 |------|--------|---------|
 | 2025-12-15 | Investigation Team | Initial discovery and Phase 1-2 analysis |
 | 2025-12-16 | Investigation Team | Fix attempts 4-6, comprehensive documentation |
-| 2025-12-17 | Investigation Team | **Attempt 7 (Wormhole-style port) - DEVICE HUNG**. Investigation now BLOCKED. Updated status and recommendations for escalation. |
+| 2025-12-17 | Investigation Team | **Session 4**: Attempt 7 (Wormhole-style port) - DEVICE HUNG. Investigation blocked. |
+| 2025-12-17 | Investigation Team | **Session 5**: **WORKAROUND FOUND!** Discovered BFloat16 precision masking real bug. Slow path (`use_pack_untilize=False`) works correctly. Identified second bug (argmax on untilized tensors). Status changed from BLOCKED to WORKAROUND AVAILABLE. |

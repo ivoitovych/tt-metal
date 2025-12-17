@@ -475,6 +475,107 @@ TEST_F(DebugUntilizeTest, UntilizeOnly33) {
     EXPECT_TRUE(all_correct) << "Untilize corrupted data for width=33";
 }
 
+// Test: Compare fast (pack_untilize) vs slow (unpacker-based) untilize
+// The slow path uses llk_unpack_untilize + regular pack, which may avoid the Blackhole bug
+TEST_F(DebugUntilizeTest, ComparePackUntilizeVsSlowUntilize) {
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    // Shape {1, 1, 8, 64} - use 8 rows to see corruption pattern
+    xt::xarray<float>::shape_type shape = {1, 1, 8, 64};
+    xt::xarray<float> a = xt::zeros<float>(shape);
+
+    // Set known sequential values
+    for (size_t row = 0; row < 8; ++row) {
+        for (size_t col = 0; col < 64; ++col) {
+            a(0, 0, row, col) = static_cast<float>(row * 100 + col);
+        }
+    }
+
+    auto tensor_a = ttml::core::from_xtensor(a, device);
+
+    // Fast path (pack_untilize=true, default)
+    auto untilized_fast = ttnn::untilize(tensor_a, std::nullopt, true, true);
+    auto vec_fast = ttml::core::to_vector(untilized_fast);
+
+    // Slow path (pack_untilize=false) - uses unpacker-based untilize
+    auto untilized_slow = ttnn::untilize(tensor_a, std::nullopt, true, false);
+    auto vec_slow = ttml::core::to_vector(untilized_slow);
+
+    std::cout << "\n=== Comparing pack_untilize (fast) vs unpacker-based (slow) untilize ===" << std::endl;
+
+    bool fast_correct = true;
+    bool slow_correct = true;
+    bool paths_differ = false;
+
+    for (size_t row = 0; row < 8; ++row) {
+        std::cout << "Row " << row << ":" << std::endl;
+        std::cout << "  Fast: ";
+        for (size_t col = 0; col < 10; ++col) {
+            float expected = static_cast<float>(row * 100 + col);
+            float actual = vec_fast[row * 64 + col];
+            std::cout << actual << " ";
+            if (std::fabs(actual - expected) > 0.1f) {
+                fast_correct = false;
+            }
+        }
+        std::cout << std::endl;
+
+        std::cout << "  Slow: ";
+        for (size_t col = 0; col < 10; ++col) {
+            float expected = static_cast<float>(row * 100 + col);
+            float actual = vec_slow[row * 64 + col];
+            std::cout << actual << " ";
+            if (std::fabs(actual - expected) > 0.1f) {
+                slow_correct = false;
+            }
+            if (std::fabs(vec_fast[row * 64 + col] - vec_slow[row * 64 + col]) > 0.1f) {
+                paths_differ = true;
+            }
+        }
+        std::cout << std::endl;
+    }
+
+    std::cout << "\n=== Results ===" << std::endl;
+    std::cout << "Fast path (pack_untilize=true):  " << (fast_correct ? "CORRECT" : "CORRUPTED") << std::endl;
+    std::cout << "Slow path (pack_untilize=false): " << (slow_correct ? "CORRECT" : "CORRUPTED") << std::endl;
+    std::cout << "Paths produce different results: " << (paths_differ ? "YES" : "NO") << std::endl;
+
+    // The slow path should work even if the fast path is corrupted
+    EXPECT_TRUE(slow_correct) << "Slow untilize path (pack_untilize=false) should produce correct results";
+}
+
+// Test: Verify slow untilize as workaround for the original failing test case
+TEST_F(DebugUntilizeTest, SlowUntilizeWorkaround) {
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    // Shape matching the original failing test
+    xt::xarray<float>::shape_type shape = {1, 1, 32, 65};
+    xt::xarray<float> a = xt::zeros<float>(shape);
+
+    // Set max at position 10 for each row
+    for (size_t i = 0; i < 32; ++i) {
+        a(0, 0, i, 10) = 1000.0f;
+    }
+
+    auto tensor_a = ttml::core::from_xtensor(a, device);
+
+    // Use slow untilize path as workaround
+    auto untilized = ttnn::untilize(tensor_a, std::nullopt, true, false);  // use_pack_untilize=false
+    auto result = ttnn::argmax(untilized, 3, true, std::nullopt, true);
+    auto vector_result = ttml::core::to_vector<uint32_t>(result);
+
+    std::cout << "SlowUntilizeWorkaround results (first 10): ";
+    for (size_t i = 0; i < std::min(vector_result.size(), size_t(10)); ++i) {
+        std::cout << vector_result[i] << " ";
+    }
+    std::cout << std::endl;
+
+    EXPECT_EQ(vector_result.size(), 32);
+    for (auto v : vector_result) {
+        EXPECT_EQ(v, 10) << "With slow untilize path, argmax should return correct value";
+    }
+}
+
 // Test 10: Inspect raw tensor data after untilize
 TEST_F(DebugUntilizeTest, InspectUntilizeOutput65) {
     auto* device = &ttml::autograd::ctx().get_device();
