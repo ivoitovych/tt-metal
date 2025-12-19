@@ -259,7 +259,7 @@ These commits form the core feature implementation:
 
 | PR | Commits (current) | Commits (cleaned) | Complexity | Dependencies | Ready |
 |----|-------------------|-------------------|------------|--------------|-------|
-| PR A: Embedding Workaround | 4 | 2 | Low | None | Yes |
+| PR A: Embedding Workaround | 3 | 2 | Low | None | Yes |
 | PR B: Softmax FP32 Option | 6 | 2 | Low | None | Yes (after cleanup) |
 | PR C: Task Heads Implementation | ~8 | ~6 | High | PRs A, B | After above |
 | PR D: Task Heads Tests | ~4 | ~3 | Medium | PR C | After PR C |
