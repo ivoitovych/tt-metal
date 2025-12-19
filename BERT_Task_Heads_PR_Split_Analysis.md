@@ -12,27 +12,26 @@ The BERT Task Heads branch contains 49 commits with significant technical debt:
 - Multiple bug workarounds that should be separate PRs
 - Core task heads implementation mixed with debugging code
 
-**Recommended approach:** Split into 5 focused PRs and clean up documentation.
+**Recommended approach:** Split into 4 focused PRs and clean up documentation.
 
 **Blockers:** Several known issues affect test reliability and require workarounds. See [Known Blockers and Issues](#known-blockers-and-issues) section.
 
 ## Commit Categories
 
-### Category 1: Core Task Heads Implementation (~12 commits)
+### Category 1: Core Task Heads Implementation (~10 commits)
 
-These commits form the core feature and should stay together:
+These commits form the core feature implementation:
 
 | Commit | Description |
 |--------|-------------|
 | `2ee6c1839d` | feat: Implement BERT task heads architecture v2 |
 | `457d6175bc` | feat: Implement critical integration components |
 | `35d709cc85` | feat: Add comprehensive skeleton implementations |
-| `e0daa0febb` | feat: Complete BERT Task Heads validation tests |
 | `a8284d8e28` | fix: Fix compilation errors and test isolation |
 | `65a3f7e94c` | fix: Add Python bindings for BERT task models |
 | `8233fd06a2` | fix: Add type_vocab_size binding |
 | `f55c609017` | fix: Handle both file and directory paths |
-| `8827592407` | fix: Fix golden reference tests |
+| `84723951a8` | fix: Fix I64 dtype error in safetensors loading |
 | `6eee1d3d12` | feat: Identify root cause with granular embedding decomposition |
 
 **Files:**
@@ -42,7 +41,7 @@ These commits form the core feature and should stay together:
 - `tt-train/sources/ttml/serialization/bert_training_state.cpp`, `.hpp`
 - `tt-train/sources/ttml/nanobind/nb_models.cpp`
 - `tt-train/configs/bert_*.yaml`
-- `tt-train/tests/model/bert_task_heads_test.cpp`
+- `tt-train/examples/train_bert_classifier.cpp`, `.py`
 
 ---
 
@@ -55,7 +54,6 @@ These commits form the core feature and should stay together:
 | `cd1c004988` | fix: Workaround for TTNN embedding batch processing bug (PCC 0.608 -> 0.999999) |
 | `edd61851c3` | test: Add minimal C++ test for TTNN embedding batch processing bug |
 | `fcbedf610f` | test: Add C++ regression tests for embedding batch processing |
-| `84723951a8` | fix: Fix I64 dtype error in safetensors loading |
 
 **Files:**
 - `tt-train/sources/ttml/ops/embedding_op.cpp` - Workaround implementation
@@ -63,11 +61,11 @@ These commits form the core feature and should stay together:
 - `tt-train/tests/ops/embedding_word_vs_token_type_test.cpp` - Regression tests
 
 **Why Independent:**
-- Workaround for TTNN bug #30418
+- Workaround for TTNN embedding batch bug
 - Benefits all embedding users, not just BERT
 - Has dedicated tests
 
-**Related Issue:** [#30418](https://github.com/tenstorrent/tt-metal/issues/30418)
+**Possibly Related Issue:** [#30418](https://github.com/tenstorrent/tt-metal/issues/30418) - needs verification
 
 ---
 
@@ -139,15 +137,26 @@ These commits form the core feature and should stay together:
 
 ---
 
-### Category 6: Debug/Validation Tests (REVIEW NEEDED)
+### Category 6: Tests (Split into PR D)
 
-Many Python tests added for debugging that may not be suitable for CI:
+**Production-quality tests to keep:**
+
+| Commit | Description |
+|--------|-------------|
+| `e0daa0febb` | feat: Complete BERT Task Heads validation tests |
+| `8827592407` | fix: Fix golden reference tests |
 
 | Test File | Purpose | Keep? |
 |-----------|---------|-------|
+| `bert_task_heads_test.cpp` | C++ validation | Yes |
 | `test_bert_batch_processing.py` | Batch regression | Yes |
 | `test_bert_task_heads_basic.py` | Basic validation | Yes |
 | `test_bert_task_heads_hf_validation.py` | HuggingFace comparison | Yes |
+
+**Debug/investigation tests to remove:**
+
+| Test File | Purpose | Action |
+|-----------|---------|--------|
 | `test_bert_base_uncased_debug.py` | Debug test | Review |
 | `test_bert_layer_by_layer_validation.py` | Debug test | Review |
 | `test_attention_*.py` | Investigation tests | Remove |
@@ -161,13 +170,13 @@ Many Python tests added for debugging that may not be suitable for CI:
 
 ### PR A: Embedding Batch Workaround
 
-**Commits:** 4
+**Commits:** 3
 **Complexity:** Low
 **Ready:** Yes
 
 - Workaround for TTNN embedding batch bug
 - Regression tests
-- Reference to issue #30418
+- Reference to issue #30418 (or new issue if different)
 
 ---
 
@@ -264,22 +273,24 @@ Many Python tests added for debugging that may not be suitable for CI:
 
 ## Known Blockers and Issues
 
-### Workarounded in This Branch (Issues NOT YET Filed)
+### Workarounded in This Branch (Issues Need Filing or Verification)
 
-These bugs are workarounded in the code but GitHub issues have not been filed yet:
+These bugs are workarounded in the code but GitHub issues need to be filed or verified:
 
 | Bug | Description | Workaround | Status |
 |-----|-------------|------------|--------|
-| **Embedding Batch Bug** | TTNN embedding produces incorrect results for batch>1 | Loop over batch dimension in embedding_op.cpp | **Needs issue filed** |
+| **Embedding Batch Bug** | TTNN embedding produces incorrect results for batch>1 | Loop over batch dimension in embedding_op.cpp | **Possibly related to #30418 - needs verification** |
 | **Softmax BFloat16 Precision** | Softmax with bfloat16 accumulation causes accuracy degradation | Optional FP32 accumulation (default OFF) | **Needs issue filed** |
 
-**Action Required:** File these as GitHub issues before submitting PRs A and B.
+**Action Required:**
+- Verify if Embedding Batch Bug is the same as [#30418](https://github.com/tenstorrent/tt-metal/issues/30418), file new issue if different
+- File GitHub issue for Softmax BFloat16 Precision bug
 
-### Workarounded in Code (Issue Already Filed)
+### Possibly Related Issue (Needs Verification)
 
 | Issue | Description | Status | Impact |
 |-------|-------------|--------|--------|
-| [#30418](https://github.com/tenstorrent/tt-metal/issues/30418) | TTNN embedding batch processing issue | Workarounded | PR A contains workaround |
+| [#30418](https://github.com/tenstorrent/tt-metal/issues/30418) | TTNN embedding batch processing issue | Open | Possibly same as Embedding Batch Bug - needs verification |
 
 ### Flaky Test Issues (Poison Regression Analysis)
 
@@ -299,8 +310,8 @@ These issues cause unpredictable test failures during pre-PR validation:
 ## Recommended Submission Order
 
 ```
-Phase 1 (File bugs first):
-├── File GitHub issue for Embedding Batch Bug
+Phase 1 (Verify/file bugs first):
+├── Verify Embedding Batch Bug vs #30418 (file new issue if different)
 └── File GitHub issue for Softmax BFloat16 Precision Bug
 
 Phase 2 (Parallel - No Dependencies):
@@ -318,9 +329,9 @@ Phase 4 (After PR C):
 
 ## Next Steps
 
-1. [ ] File GitHub issue for Embedding Batch Bug
+1. [ ] Verify if Embedding Batch Bug is same as #30418, file new issue if different
 2. [ ] File GitHub issue for Softmax BFloat16 Precision Bug
-3. [ ] Create PR A (Embedding Workaround) - reference new issue
+3. [ ] Create PR A (Embedding Workaround) - reference #30418 or new issue
 4. [ ] Create PR B (Softmax FP32 Option) - reference new issue
 5. [ ] Clean up documentation (squash/remove)
 6. [ ] Remove debug/investigation tests
