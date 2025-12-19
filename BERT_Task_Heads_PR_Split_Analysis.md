@@ -18,7 +18,7 @@ The BERT Task Heads branch contains 49 commits with significant technical debt:
 
 ## Commit Categories
 
-### Category 1: Core Task Heads Implementation (~10 commits)
+### Category 1: Core Task Heads Implementation (9 commits)
 
 These commits form the core feature implementation:
 
@@ -262,7 +262,7 @@ These commits form the core feature implementation:
 | PR A: Embedding Workaround | 3 | 2 | Low | None | Yes |
 | PR B: Softmax FP32 Option | 6 | 2 | Low | None | Yes (after cleanup) |
 | PR C: Task Heads Implementation | ~8 | ~6 | High | PRs A, B | After above |
-| PR D: Task Heads Tests | ~4 | ~3 | Medium | PR C | After PR C |
+| PR D: Task Heads Tests | 2 | 2 | Medium | PR C | After PR C |
 | **Documentation cleanup** | ~25 | 1 | - | - | - |
 | **Debug tests removal** | ~10 | 0 | - | - | - |
 
