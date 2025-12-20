@@ -4,8 +4,10 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <cstring>
 #include <numbers>
 #include <numeric>
+#include <random>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
@@ -128,6 +130,240 @@ void CompareGELUVsReferenceWithShape(const std::vector<uint32_t>& shape) {
         input_data, []() { return std::uniform_real_distribution<float>(-3.0F, 3.0F); }, fixed_seed);
 
     CompareGELUVsReference(input_data);
+}
+
+}  // namespace
+
+namespace {  // ULP checking utilities
+
+// ============================================================================
+// BFloat16 Utilities and ULP Checking Infrastructure
+// ============================================================================
+// Added to support reviewer feedback: precision validation using both
+// allclose and ULP (Units in Last Place) metrics with bf16-quantized references
+
+/**
+ * Convert bfloat16 bit pattern to float32
+ */
+inline float bf16_bits_to_float32(uint16_t bf16_bits) {
+    uint32_t float_bits = static_cast<uint32_t>(bf16_bits) << 16;
+    float result;
+    std::memcpy(&result, &float_bits, sizeof(float));
+    return result;
+}
+
+/**
+ * Convert float32 to bfloat16 bits (truncation)
+ */
+inline uint16_t float32_to_bf16_bits(float value) {
+    uint32_t bits;
+    std::memcpy(&bits, &value, sizeof(float));
+    return static_cast<uint16_t>(bits >> 16);
+}
+
+/**
+ * CRITICAL: Quantize expected value to bf16 precision
+ * This round-trip is essential for meaningful ULP comparison against hardware
+ */
+inline float quantize_to_bf16(float value) {
+    return bf16_bits_to_float32(float32_to_bf16_bits(value));
+}
+
+/**
+ * Check if bf16 bit pattern is subnormal
+ * Subnormal: exponent == 0 AND mantissa != 0
+ */
+inline bool is_subnormal_bf16(uint16_t bf16_bits) {
+    uint16_t exponent = (bf16_bits & 0x7F80);
+    uint16_t mantissa = bf16_bits & 0x007F;
+    return (exponent == 0) && (mantissa != 0);
+}
+
+/**
+ * Check if bf16 bit pattern is NaN or Inf
+ * Special: exponent == 0x7F80 (all exponent bits set)
+ */
+inline bool is_special_bf16(uint16_t bf16_bits) {
+    return (bf16_bits & 0x7F80) == 0x7F80;
+}
+
+/**
+ * Calculate ULP distance in BFloat16 space
+ * Uses bf16 bit patterns (16-bit) for proper comparison
+ */
+inline uint32_t ulp_distance_bf16(float a, float b) {
+    // Handle special cases
+    if (std::isnan(a) || std::isnan(b)) {
+        return std::numeric_limits<uint32_t>::max();
+    }
+    if (a == b)
+        return 0;
+    if (std::isinf(a) || std::isinf(b)) {
+        return std::numeric_limits<uint32_t>::max();
+    }
+
+    // Convert to bf16 bit patterns (16-bit integers)
+    uint16_t ai = float32_to_bf16_bits(a);
+    uint16_t bi = float32_to_bf16_bits(b);
+
+    // Convert to signed for proper ordering
+    int16_t ai_signed = static_cast<int16_t>(ai);
+    int16_t bi_signed = static_cast<int16_t>(bi);
+
+    // Apply ordered mapping for negative numbers (sign-magnitude to two's complement)
+    if (ai_signed < 0)
+        ai_signed = static_cast<int16_t>(0x8000 - (ai & 0x7FFF));
+    if (bi_signed < 0)
+        bi_signed = static_cast<int16_t>(0x8000 - (bi & 0x7FFF));
+
+    return static_cast<uint32_t>(std::abs(static_cast<int32_t>(ai_signed) - static_cast<int32_t>(bi_signed)));
+}
+
+/**
+ * ULP analysis result with diagnostics
+ */
+struct ULPResult {
+    uint32_t max_ulp;
+    size_t worst_index;
+    float computed_value;
+    float expected_value;
+    float expected_quantized;
+    float abs_diff;
+    float rel_diff;
+};
+
+/**
+ * Analyze ULP error across tensor with bf16-quantized reference
+ * NOTE: For values near zero (< NEAR_ZERO_THRESHOLD), ULP distance is not
+ * meaningful because tiny absolute differences cause huge ULP values.
+ * Such values are skipped; use allclose for near-zero accuracy.
+ */
+constexpr float NEAR_ZERO_THRESHOLD = 1e-2f;  // Skip ULP check for small values
+
+inline ULPResult analyze_ulp_error(const xt::xarray<float>& computed, const xt::xarray<float>& expected) {
+    ULPResult result = {0, 0, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+
+    for (size_t i = 0; i < computed.size(); ++i) {
+        float comp = computed.flat(i);
+        float exp_orig = expected.flat(i);
+        float exp_q = quantize_to_bf16(exp_orig);  // CRITICAL: bf16 round-trip
+
+        // Skip near-zero values where ULP is not meaningful
+        // For these, allclose with atol handles accuracy checking
+        if (std::abs(exp_q) < NEAR_ZERO_THRESHOLD && std::abs(comp) < NEAR_ZERO_THRESHOLD) {
+            continue;
+        }
+
+        uint32_t ulp = ulp_distance_bf16(comp, exp_q);
+
+        if (ulp > result.max_ulp) {
+            result.max_ulp = ulp;
+            result.worst_index = i;
+            result.computed_value = comp;
+            result.expected_value = exp_orig;
+            result.expected_quantized = exp_q;
+            result.abs_diff = std::abs(comp - exp_q);
+            result.rel_diff = (exp_q != 0.0f) ? (result.abs_diff / std::abs(exp_q)) : 0.0f;
+        }
+    }
+
+    return result;
+}
+
+/**
+ * Check ULP with detailed diagnostics on failure
+ */
+inline bool check_ulp_accuracy(
+    const xt::xarray<float>& computed,
+    const xt::xarray<float>& expected,
+    uint32_t max_allowed_ulp,
+    bool always_print = false) {
+    auto result = analyze_ulp_error(computed, expected);
+
+    bool passed = (result.max_ulp <= max_allowed_ulp);
+
+    if (!passed || always_print) {
+        std::cout << "\n=== ULP Diagnostic Report ===" << std::endl;
+        std::cout << "Status: " << (passed ? "PASS" : "FAIL") << std::endl;
+        std::cout << "Max ULP: " << result.max_ulp << " (threshold: " << max_allowed_ulp << ")" << std::endl;
+        std::cout << "Worst element index: " << result.worst_index << std::endl;
+        std::cout << "  Computed:           " << result.computed_value << std::endl;
+        std::cout << "  Expected (float32): " << result.expected_value << std::endl;
+        std::cout << "  Expected (bf16):    " << result.expected_quantized << std::endl;
+        std::cout << "  Absolute diff:      " << result.abs_diff << std::endl;
+        std::cout << "  Relative diff:      " << result.rel_diff << std::endl;
+        std::cout << "=========================" << std::endl;
+    }
+
+    return passed;
+}
+
+// Policy: Default thresholds
+// Note: ULP is now calculated in bf16 space (16-bit). Observed hardware error
+// is typically 8-10 ULP with occasional spikes up to 64 for edge cases.
+// Using generous thresholds since allclose handles primary accuracy validation.
+constexpr float DEFAULT_RTOL = 1e-3f;
+constexpr float DEFAULT_ATOL = 3e-2f;
+constexpr uint32_t DEFAULT_ULP_FORWARD = 128;   // Generous for hw variation
+constexpr uint32_t DEFAULT_ULP_BACKWARD = 256;  // More for backward accumulation
+
+/**
+ * NEW HELPER: Compare GELU with BOTH allclose AND ULP checks
+ * Does NOT modify existing CompareGELUVsReference
+ */
+void CompareGELU_AllCloseAndULP(
+    const xt::xarray<float>& input_data,
+    float rtol = DEFAULT_RTOL,
+    float atol = DEFAULT_ATOL,
+    uint32_t ulp_fwd = DEFAULT_ULP_FORWARD,
+    uint32_t ulp_bwd = DEFAULT_ULP_BACKWARD) {
+    using namespace ttml;
+
+    auto input = autograd::create_tensor(core::from_xtensor(input_data, &autograd::ctx().get_device()));
+
+    // === FORWARD PASS ===
+    auto result = ops::gelu(input);
+    auto result_xtensor = core::to_xtensor(result->get_value());
+    auto expected_result = gelu_forward_reference(input_data);
+
+    // Dual validation: allclose + ULP
+    EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, rtol, atol)) << "Forward: allclose failed";
+    EXPECT_TRUE(check_ulp_accuracy(result_xtensor, expected_result, ulp_fwd))
+        << "Forward: ULP check failed (max " << ulp_fwd << " ULP expected)";
+
+    // === BACKWARD PASS ===
+    auto target = autograd::create_tensor(core::zeros_like(result->get_value()));
+    auto loss = ops::mse_loss(result, target);
+    loss->backward();
+
+    auto input_grad = core::to_xtensor(input->get_grad());
+    auto total_elements = static_cast<float>(input_data.size());
+    auto mse_grad = (2.0f / total_elements) * expected_result;
+    auto expected_grad = gelu_backward_reference(input_data, mse_grad);
+
+    // Dual validation: allclose + ULP
+    EXPECT_TRUE(xt::allclose(input_grad, expected_grad, rtol, atol)) << "Backward: allclose failed";
+    EXPECT_TRUE(check_ulp_accuracy(input_grad, expected_grad, ulp_bwd))
+        << "Backward: ULP check failed (max " << ulp_bwd << " ULP expected)";
+}
+
+/**
+ * Helper for shape-based generation with seeded random data
+ */
+void CompareGELU_AllCloseAndULP_WithShape(
+    const std::vector<uint32_t>& shape,
+    uint32_t seed,
+    float range_min = -3.0f,
+    float range_max = 3.0f,
+    uint32_t ulp_fwd = DEFAULT_ULP_FORWARD,
+    uint32_t ulp_bwd = DEFAULT_ULP_BACKWARD) {
+    xt::xarray<float> input_data = xt::empty<float>(shape);
+    ttml::core::parallel_generate<float>(
+        input_data,
+        [range_min, range_max]() { return std::uniform_real_distribution<float>(range_min, range_max); },
+        seed);
+
+    CompareGELU_AllCloseAndULP(input_data, DEFAULT_RTOL, DEFAULT_ATOL, ulp_fwd, ulp_bwd);
 }
 
 }  // namespace
@@ -577,3 +813,244 @@ TEST_P(GELUMemoryTest, GELU_MemoryConfig) {
 
 INSTANTIATE_TEST_SUITE_P(
     MemoryConfigs, GELUMemoryTest, ::testing::Values(ttnn::L1_MEMORY_CONFIG, ttnn::DRAM_MEMORY_CONFIG));
+
+// ============================================================================
+// NEW TESTS: Reviewer Feedback + Enhanced Coverage
+// ============================================================================
+// These tests are additions only - existing tests remain unchanged
+// Address reviewer requirements:
+//   1. ULP-based accuracy checks alongside allclose
+//   2. Exhaustive bfloat16 coverage (all 65,536 values)
+// Additional coverage:
+//   - Explicit size tiers (small/medium/big)
+//   - Enhanced data coverage (critical points, distributions)
+//   - Shape variety (curated + pseudo-random)
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// PART B: Reviewer-Required Tests (6 tests)
+// ----------------------------------------------------------------------------
+
+TEST_F(GELUOpTest, NIGHTLY_GELU_ExhaustiveBFloat16) {
+    using namespace ttml;
+
+    // Test ALL 65,536 possible bfloat16 values as suggested by nmauriceTT
+    const uint32_t bf16_count = 65536;
+    std::vector<uint16_t> bf16_bits(bf16_count);
+    std::iota(bf16_bits.begin(), bf16_bits.end(), 0);
+
+    // Convert to float32, filtering special values and subnormals
+    std::vector<float> input_data(bf16_count);
+    for (size_t i = 0; i < bf16_count; ++i) {
+        if (is_special_bf16(bf16_bits[i]) || is_subnormal_bf16(bf16_bits[i])) {
+            input_data[i] = 0.0f;  // Set specials/subnormals to 0
+        } else {
+            input_data[i] = bf16_bits_to_float32(bf16_bits[i]);
+        }
+    }
+
+    // Create 256×256 tensor
+    auto input = autograd::create_tensor(
+        core::from_vector(input_data, ttnn::Shape{1, 1, 256, 256}, &autograd::ctx().get_device()));
+
+    // Forward pass
+    auto result = ops::gelu(input);
+    auto result_xtensor = core::to_xtensor(result->get_value());
+
+    xt::xarray<float> input_xarray = xt::adapt(input_data, {1, 1, 256, 256});
+    auto expected_result = gelu_forward_reference(input_xarray);
+
+    // Thresholds for exhaustive test
+    EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 1e-3F, 3e-2F))
+        << "Exhaustive BF16 forward: allclose failed";
+    EXPECT_TRUE(check_ulp_accuracy(result_xtensor, expected_result, DEFAULT_ULP_FORWARD))
+        << "Exhaustive BF16 forward: ULP check failed";
+
+    // Backward pass
+    auto target = autograd::create_tensor(core::zeros_like(result->get_value()));
+    auto loss = ops::mse_loss(result, target);
+    loss->backward();
+
+    auto input_grad = core::to_xtensor(input->get_grad());
+    auto total_elements = static_cast<float>(bf16_count);
+    auto mse_grad = (2.0f / total_elements) * expected_result;
+    auto expected_grad = gelu_backward_reference(input_xarray, mse_grad);
+
+    EXPECT_TRUE(xt::allclose(input_grad, expected_grad, 1e-3F, 3e-2F)) << "Exhaustive BF16 backward: allclose failed";
+    EXPECT_TRUE(check_ulp_accuracy(input_grad, expected_grad, DEFAULT_ULP_BACKWARD))
+        << "Exhaustive BF16 backward: ULP check failed";
+}
+
+TEST_F(GELUOpTest, GELU_ULP_Minimal) {
+    // Representative ULP test: minimal size
+    CompareGELU_AllCloseAndULP_WithShape({1, 1, 1, 32}, 42);
+}
+
+TEST_F(GELUOpTest, GELU_ULP_BERT_Base) {
+    // Representative ULP test: BERT-base hidden dimension
+    CompareGELU_AllCloseAndULP_WithShape({2, 1, 64, 768}, 1001);
+}
+
+TEST_F(GELUOpTest, GELU_ULP_BERT_Intermediate) {
+    // Representative ULP test: BERT-base intermediate dimension
+    CompareGELU_AllCloseAndULP_WithShape({2, 1, 64, 3072}, 1002);
+}
+
+TEST_F(GELUOpTest, GELU_ULP_Large) {
+    // Representative ULP test: large tensor
+    CompareGELU_AllCloseAndULP_WithShape({1, 1, 1, 32768}, 2001);
+}
+
+TEST_F(GELUOpTest, NIGHTLY_GELU_ULP_VeryLarge) {
+    // Representative ULP test: 1M elements with relaxed tolerances
+    xt::xarray<float> data = xt::empty<float>({1, 1, 1, 1048576});
+    ttml::core::parallel_generate<float>(
+        data, []() { return std::uniform_real_distribution<float>(-5.0F, 5.0F); }, 99999);
+    CompareGELU_AllCloseAndULP(data, 2e-3F, 5e-2F);  // Use default ULP thresholds
+}
+
+// ----------------------------------------------------------------------------
+// PART C: Size Coverage Tests (4 tests)
+// ----------------------------------------------------------------------------
+
+TEST_F(GELUOpTest, GELU_Size_Small_ULP) {
+    // Small size tier: 1,024 elements
+    CompareGELU_AllCloseAndULP_WithShape({1, 1, 32, 32}, 3001);
+}
+
+TEST_F(GELUOpTest, GELU_Size_Medium_ULP) {
+    // Medium size tier: ~98K elements (BERT-base scale)
+    CompareGELU_AllCloseAndULP_WithShape({2, 1, 64, 768}, 3002);
+}
+
+TEST_F(GELUOpTest, GELU_Size_MediumBatch_ULP) {
+    // Medium size tier with batch: ~98K elements
+    CompareGELU_AllCloseAndULP_WithShape({4, 1, 32, 768}, 3003);
+}
+
+TEST_F(GELUOpTest, NIGHTLY_GELU_Size_Big_ULP) {
+    // Big size tier: 1M elements
+    CompareGELU_AllCloseAndULP_WithShape({1, 1, 1024, 1024}, 3004);
+}
+
+// ----------------------------------------------------------------------------
+// PART D: Data Coverage Tests (4 tests)
+// ----------------------------------------------------------------------------
+
+TEST_F(GELUOpTest, GELU_Data_CriticalPoints_ULP) {
+    using namespace ttml;
+
+    // Mathematically significant points for GELU
+    std::vector<float> critical_points = {
+        -3.0f,                    // Left saturation
+        -std::sqrt(2.0f),         // -√2 ≈ -1.414
+        -1.0f,                    // Inflection region
+        -1.0f / std::sqrt(2.0f),  // -1/√2 ≈ -0.707
+        -0.5f,                    // Near-zero negative
+        0.0f,                     // Exact zero (GELU(0) = 0)
+        0.5f,                     // Near-zero positive
+        1.0f / std::sqrt(2.0f),   // 1/√2 ≈ 0.707
+        1.0f,                     // Inflection region
+        std::sqrt(2.0f),          // √2 ≈ 1.414
+        3.0f                      // Right saturation
+    };
+    critical_points.resize(32, 0.0f);  // Pad for tile alignment
+
+    xt::xarray<float> input_data = xt::adapt(critical_points, {1, 1, 1, 32});
+    CompareGELU_AllCloseAndULP(input_data);
+}
+
+TEST_F(GELUOpTest, GELU_Data_NearZero_ULP) {
+    // Data coverage: very small values around zero
+    // Note: ULP is less meaningful near zero; allclose with atol handles these cases
+    xt::xarray<float> data = xt::empty<float>({1, 1, 128, 768});
+    ttml::core::parallel_generate<float>(
+        data, []() { return std::uniform_real_distribution<float>(-0.1F, 0.1F); }, 4001);
+    CompareGELU_AllCloseAndULP(data);
+}
+
+TEST_F(GELUOpTest, GELU_Data_MultiRange_ULP) {
+    // Data coverage: test multiple ranges
+    // Note: Wide range (-10, 10) includes saturation regions with larger hw error
+    using namespace ttml;
+
+    std::vector<std::tuple<float, float, float, float>> ranges = {
+        {-1.0f, 1.0f, 1e-3f, 3e-2f},   // Narrow range - standard tolerances
+        {-3.0f, 3.0f, 1e-3f, 3e-2f},   // Working range - standard tolerances
+        {-10.0f, 10.0f, 2e-3f, 5e-2f}  // Wide range (saturation) - relaxed
+    };
+
+    for (size_t i = 0; i < ranges.size(); ++i) {
+        xt::xarray<float> data = xt::empty<float>({2, 1, 64, 768});
+        auto [min_val, max_val, rtol, atol] = ranges[i];
+
+        core::parallel_generate<float>(
+            data, [min_val, max_val]() { return std::uniform_real_distribution<float>(min_val, max_val); }, 4002 + i);
+
+        CompareGELU_AllCloseAndULP(data, rtol, atol);
+    }
+}
+
+TEST_F(GELUOpTest, GELU_Data_NormalDist_ULP) {
+    // Data coverage: normal distribution
+    xt::xarray<float> data = xt::empty<float>({2, 1, 128, 1024});
+    ttml::core::parallel_generate<float>(data, []() { return std::normal_distribution<float>(0.0F, 1.0F); }, 4005);
+    CompareGELU_AllCloseAndULP(data);
+}
+
+// ----------------------------------------------------------------------------
+// PART E: Shape Coverage Tests (3 tests)
+// ----------------------------------------------------------------------------
+
+TEST_F(GELUOpTest, GELU_Shapes_Curated_ULP) {
+    // Shape coverage: hand-picked important shapes
+    std::vector<std::vector<uint32_t>> shapes = {
+        {1, 1, 1, 4096},   // 1D-like
+        {1, 1, 512, 32},   // Tall
+        {1, 1, 32, 1024},  // Wide
+        {1, 8, 64, 64},    // 3D-like
+        {4, 2, 128, 256},  // Full 4D
+        {2, 1, 64, 100},   // Unaligned (C=100)
+        {1, 1, 1, 160},    // Wt%4=1
+        {1, 1, 1, 192},    // Wt%4=2
+        {1, 1, 1, 224},    // Wt%4=3
+    };
+
+    for (size_t i = 0; i < shapes.size(); ++i) {
+        CompareGELU_AllCloseAndULP_WithShape(shapes[i], 5001 + i);
+    }
+}
+
+TEST_F(GELUOpTest, GELU_Shapes_RandomSeeded_ULP) {
+    // Shape coverage: seeded pseudo-random shapes
+    using namespace ttml;
+
+    std::mt19937 rng(777);  // Fixed seed for reproducibility
+
+    for (int i = 0; i < 10; ++i) {
+        uint32_t batch = 1 + (rng() % 4);
+        uint32_t seq = 32 * (1 + (rng() % 16));
+        uint32_t hidden = 32 * (1 + (rng() % 128));
+
+        std::vector<uint32_t> shape = {batch, 1, seq, hidden};
+        CompareGELU_AllCloseAndULP_WithShape(shape, 6001 + i);
+    }
+}
+
+TEST_F(GELUOpTest, GELU_Shapes_EdgeCases_ULP) {
+    // Shape coverage: edge cases with power-of-2 dimensions
+    using namespace ttml;
+
+    std::mt19937 rng(888);
+    std::vector<uint32_t> power2_sizes = {32, 64, 128, 256, 512, 1024};
+
+    for (int i = 0; i < 5; ++i) {
+        uint32_t batch = (rng() % 2) ? 1 : (2 + rng() % 6);
+        uint32_t seq_idx = rng() % power2_sizes.size();
+        uint32_t hid_idx = rng() % power2_sizes.size();
+
+        std::vector<uint32_t> shape = {batch, 1, power2_sizes[seq_idx], power2_sizes[hid_idx]};
+
+        CompareGELU_AllCloseAndULP_WithShape(shape, 7001 + i);
+    }
+}
