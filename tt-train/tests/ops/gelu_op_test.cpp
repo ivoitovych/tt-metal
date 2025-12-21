@@ -3,8 +3,11 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <fstream>
+#include <iomanip>
 #include <numbers>
 #include <numeric>
 #include <random>
@@ -1053,4 +1056,170 @@ TEST_F(GELUOpTest, GELU_Shapes_EdgeCases_ULP) {
 
         CompareGELU_AllCloseAndULP_WithShape(shape, 7001 + i);
     }
+}
+
+// ----------------------------------------------------------------------------
+// Diagnostic Test: ULP Data Collection for All Valid BF16 Values
+// ----------------------------------------------------------------------------
+
+TEST_F(GELUOpTest, DISABLED_GELU_ULP_DiagnosticDataCollection) {
+    // Diagnostic test: Collects ULP data for ALL valid bf16 numeric values
+    // Outputs to /tmp/gelu_ulp_data.csv sorted by input value
+    // Use: ./ttml_tests --gtest_filter="*DISABLED_GELU_ULP_DiagnosticDataCollection*" --gtest_also_run_disabled_tests
+
+    using namespace ttml;
+
+    const std::string output_file = "/tmp/gelu_ulp_data.csv";
+    std::cout << "\n=== GELU ULP Diagnostic Data Collection ===" << std::endl;
+    std::cout << "Output file: " << output_file << std::endl;
+
+    // Collect all valid bf16 values (exclude NaN, Inf, subnormals)
+    std::vector<std::pair<float, uint16_t>> valid_values;  // (float_value, bf16_bits)
+
+    for (uint32_t bits = 0; bits < 65536; ++bits) {
+        uint16_t bf16_bits = static_cast<uint16_t>(bits);
+
+        // Skip special values (NaN, Inf) and subnormals
+        if (is_special_bf16(bf16_bits) || is_subnormal_bf16(bf16_bits)) {
+            continue;
+        }
+
+        float value = bf16_bits_to_float32(bf16_bits);
+
+        // Skip if conversion gives non-finite result
+        if (!std::isfinite(value)) {
+            continue;
+        }
+
+        valid_values.emplace_back(value, bf16_bits);
+    }
+
+    std::cout << "Valid bf16 values: " << valid_values.size() << std::endl;
+
+    // Sort by float value
+    std::sort(valid_values.begin(), valid_values.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    // Prepare input tensor (pad to tile-aligned size)
+    const size_t num_values = valid_values.size();
+    const size_t padded_size = ((num_values + 31) / 32) * 32;  // Round up to multiple of 32
+
+    std::vector<float> input_data(padded_size, 0.0f);
+    for (size_t i = 0; i < num_values; ++i) {
+        input_data[i] = valid_values[i].first;
+    }
+
+    // Compute shape for tensor (use 1D-like shape)
+    const uint32_t height = static_cast<uint32_t>((padded_size + 1023) / 1024);
+    const uint32_t width = static_cast<uint32_t>(padded_size / height);
+    const uint32_t actual_size = height * width;
+
+    // Resize if needed
+    input_data.resize(actual_size, 0.0f);
+
+    std::cout << "Tensor shape: [1, 1, " << height << ", " << width << "]" << std::endl;
+    std::cout << "Running GELU on hardware..." << std::endl;
+
+    // Run GELU on hardware
+    auto input = autograd::create_tensor(
+        core::from_vector(input_data, ttnn::Shape{1, 1, height, width}, &autograd::ctx().get_device()));
+
+    auto result = ops::gelu(input);
+    auto result_data = core::to_vector(result->get_value());
+
+    // Compute reference and collect ULP data
+    std::cout << "Computing reference and ULP distances..." << std::endl;
+
+    struct ULPDataPoint {
+        float input_value;
+        uint16_t bf16_bits;
+        float computed;
+        float expected_f32;
+        float expected_bf16;
+        uint32_t ulp;
+        float abs_diff;
+    };
+
+    std::vector<ULPDataPoint> data_points;
+    data_points.reserve(num_values);
+
+    for (size_t i = 0; i < num_values; ++i) {
+        float input_val = valid_values[i].first;
+        float computed = result_data[i];
+
+        // Reference GELU (float32)
+        const float sqrt2 = std::sqrt(2.0f);
+        float expected_f32 = 0.5f * input_val * (1.0f + std::erf(input_val / sqrt2));
+
+        // Quantize expected to bf16
+        float expected_bf16 = quantize_to_bf16(expected_f32);
+
+        // Compute ULP distance
+        uint32_t ulp = ulp_distance_bf16(computed, expected_bf16);
+
+        float abs_diff = std::abs(computed - expected_bf16);
+
+        data_points.push_back(
+            {input_val, valid_values[i].second, computed, expected_f32, expected_bf16, ulp, abs_diff});
+    }
+
+    // Write to CSV file
+    std::cout << "Writing to " << output_file << "..." << std::endl;
+
+    std::ofstream csv(output_file);
+    csv << "input_value,bf16_bits_hex,computed,expected_f32,expected_bf16,ulp,abs_diff\n";
+
+    for (const auto& dp : data_points) {
+        csv << std::setprecision(8) << dp.input_value << ",0x" << std::hex << std::setw(4) << std::setfill('0')
+            << dp.bf16_bits << std::dec << "," << std::setprecision(8) << dp.computed << "," << dp.expected_f32 << ","
+            << dp.expected_bf16 << "," << dp.ulp << "," << dp.abs_diff << "\n";
+    }
+
+    csv.close();
+
+    // Print summary statistics
+    uint32_t max_ulp = 0;
+    double sum_ulp = 0;
+    size_t ulp_0_count = 0, ulp_1_count = 0, ulp_2_count = 0, ulp_gt2_count = 0;
+    float worst_input = 0, worst_computed = 0, worst_expected = 0;
+
+    for (const auto& dp : data_points) {
+        sum_ulp += dp.ulp;
+        if (dp.ulp > max_ulp) {
+            max_ulp = dp.ulp;
+            worst_input = dp.input_value;
+            worst_computed = dp.computed;
+            worst_expected = dp.expected_bf16;
+        }
+        if (dp.ulp == 0)
+            ulp_0_count++;
+        else if (dp.ulp == 1)
+            ulp_1_count++;
+        else if (dp.ulp == 2)
+            ulp_2_count++;
+        else
+            ulp_gt2_count++;
+    }
+
+    double mean_ulp = sum_ulp / data_points.size();
+
+    std::cout << "\n=== ULP Statistics ===" << std::endl;
+    std::cout << "Total data points: " << data_points.size() << std::endl;
+    std::cout << "Max ULP: " << max_ulp << std::endl;
+    std::cout << "Mean ULP: " << std::fixed << std::setprecision(4) << mean_ulp << std::endl;
+    std::cout << "ULP distribution:" << std::endl;
+    std::cout << "  ULP=0: " << ulp_0_count << " (" << std::setprecision(2)
+              << (100.0 * ulp_0_count / data_points.size()) << "%)" << std::endl;
+    std::cout << "  ULP=1: " << ulp_1_count << " (" << (100.0 * ulp_1_count / data_points.size()) << "%)" << std::endl;
+    std::cout << "  ULP=2: " << ulp_2_count << " (" << (100.0 * ulp_2_count / data_points.size()) << "%)" << std::endl;
+    std::cout << "  ULP>2: " << ulp_gt2_count << " (" << (100.0 * ulp_gt2_count / data_points.size()) << "%)"
+              << std::endl;
+    std::cout << "\nWorst case:" << std::endl;
+    std::cout << "  Input: " << worst_input << std::endl;
+    std::cout << "  Computed: " << worst_computed << std::endl;
+    std::cout << "  Expected (bf16): " << worst_expected << std::endl;
+    std::cout << "\nData written to: " << output_file << std::endl;
+    std::cout << "Run plot script: python3 /tmp/plot_gelu_ulp.py" << std::endl;
+
+    // Test always passes - it's just for data collection
+    EXPECT_TRUE(true);
 }
