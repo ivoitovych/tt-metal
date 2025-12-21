@@ -58,26 +58,26 @@ def main():
         fontweight="bold",
     )
 
-    # Plot 1: ULP vs Input Value (scatter)
+    # Plot 1: ULP vs Input Value (ALL bf16 values, symmetric log scale)
     ax1 = axes[0, 0]
-    scatter = ax1.scatter(
+    ax1.scatter(
         df["input_value"],
         df["ulp"],
-        c=df["ulp"],
-        cmap="RdYlGn_r",
+        c="blue",
         s=1,
-        alpha=0.5,
-        vmin=0,
-        vmax=max(3, df["ulp"].max()),
+        alpha=0.3,
     )
-    ax1.set_xlabel("Input Value")
-    ax1.set_ylabel("ULP Error")
-    ax1.set_title("ULP Error vs Input Value")
+    ax1.set_xlabel("Input Value (symlog scale)")
+    ax1.set_ylabel("ULP Error (log scale)")
+    ax1.set_title("ULP Error vs Input Value (Full BF16 Range)")
+    # Use symmetric log scale for x-axis to handle large positive/negative values
+    ax1.set_xscale("symlog", linthresh=1.0)
+    # Use log scale for y-axis to show full ULP range (add 1 to handle ULP=0)
+    ax1.set_yscale("symlog", linthresh=1.0)
     ax1.axhline(y=1, color="orange", linestyle="--", alpha=0.7, label="ULP=1")
     ax1.axhline(y=2, color="red", linestyle="--", alpha=0.7, label="ULP=2")
-    ax1.set_ylim(-0.5, min(10, df["ulp"].max() + 1))
-    ax1.legend(loc="upper right")
-    plt.colorbar(scatter, ax=ax1, label="ULP")
+    ax1.axhline(y=128, color="purple", linestyle=":", alpha=0.7, label="ULP=128")
+    ax1.legend(loc="upper right", fontsize=8)
 
     # Plot 2: ULP Distribution (histogram)
     ax2 = axes[0, 1]
