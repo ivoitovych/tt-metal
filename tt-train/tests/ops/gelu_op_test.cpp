@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <numbers>
@@ -13,6 +12,7 @@
 #include <random>
 #include <vector>
 
+#include "../core/bf16_ulp.hpp"
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/random.hpp"
@@ -140,86 +140,37 @@ void CompareGELUVsReferenceWithShape(const std::vector<uint32_t>& shape) {
 namespace {  // ULP checking utilities
 
 // ============================================================================
-// BFloat16 Utilities and ULP Checking Infrastructure
+// BFloat16 ULP Checking Infrastructure
 // ============================================================================
-// Added to support reviewer feedback: precision validation using both
-// allclose and ULP (Units in Last Place) metrics with bf16-quantized references
-
-/**
- * Convert bfloat16 bit pattern to float32
- */
-inline float bf16_bits_to_float32(uint16_t bf16_bits) {
-    uint32_t float_bits = static_cast<uint32_t>(bf16_bits) << 16;
-    float result;
-    std::memcpy(&result, &float_bits, sizeof(float));
-    return result;
-}
-
-/**
- * Convert float32 to bfloat16 bits (truncation)
- */
-inline uint16_t float32_to_bf16_bits(float value) {
-    uint32_t bits;
-    std::memcpy(&bits, &value, sizeof(float));
-    return static_cast<uint16_t>(bits >> 16);
-}
+// Uses the bf16_ulp module for precision validation with both allclose and
+// ULP (Units in Last Place) metrics with bf16-quantized references.
 
 /**
  * CRITICAL: Quantize expected value to bf16 precision
  * This round-trip is essential for meaningful ULP comparison against hardware
  */
 inline float quantize_to_bf16(float value) {
-    return bf16_bits_to_float32(float32_to_bf16_bits(value));
+    return bf16_ulp::bf16_bits_to_float32(bf16_ulp::float32_to_bf16_bits(value));
 }
 
 /**
- * Check if bf16 bit pattern is subnormal
- * Subnormal: exponent == 0 AND mantissa != 0
- */
-inline bool is_subnormal_bf16(uint16_t bf16_bits) {
-    uint16_t exponent = (bf16_bits & 0x7F80);
-    uint16_t mantissa = bf16_bits & 0x007F;
-    return (exponent == 0) && (mantissa != 0);
-}
-
-/**
- * Check if bf16 bit pattern is NaN or Inf
- * Special: exponent == 0x7F80 (all exponent bits set)
+ * Check if bf16 bit pattern is NaN or Inf (special value)
  */
 inline bool is_special_bf16(uint16_t bf16_bits) {
-    return (bf16_bits & 0x7F80) == 0x7F80;
+    return bf16_ulp::bf16_is_nan(bf16_bits) || bf16_ulp::bf16_is_inf(bf16_bits);
 }
 
 /**
  * Calculate ULP distance in BFloat16 space
- * Uses bf16 bit patterns (16-bit) for proper comparison
+ * Wrapper around bf16_ulp module for compatibility with existing code
  */
 inline uint32_t ulp_distance_bf16(float a, float b) {
-    // Handle special cases
-    if (std::isnan(a) || std::isnan(b)) {
+    uint16_t result = bf16_ulp::ulp_distance(a, b);
+    // Convert kError to max uint32_t for backward compatibility
+    if (result == bf16_ulp::kError) {
         return std::numeric_limits<uint32_t>::max();
     }
-    if (a == b)
-        return 0;
-    if (std::isinf(a) || std::isinf(b)) {
-        return std::numeric_limits<uint32_t>::max();
-    }
-
-    // Convert to bf16 bit patterns (16-bit integers)
-    uint16_t ai = float32_to_bf16_bits(a);
-    uint16_t bi = float32_to_bf16_bits(b);
-
-    // Convert to signed for proper ordering
-    int16_t ai_signed = static_cast<int16_t>(ai);
-    int16_t bi_signed = static_cast<int16_t>(bi);
-
-    // Apply ordered mapping for negative numbers (sign-magnitude to two's complement)
-    if (ai_signed < 0)
-        ai_signed = static_cast<int16_t>(0x8000 - (ai & 0x7FFF));
-    if (bi_signed < 0)
-        bi_signed = static_cast<int16_t>(0x8000 - (bi & 0x7FFF));
-
-    return static_cast<uint32_t>(std::abs(static_cast<int32_t>(ai_signed) - static_cast<int32_t>(bi_signed)));
+    return static_cast<uint32_t>(result);
 }
 
 /**
@@ -845,10 +796,10 @@ TEST_F(GELUOpTest, NIGHTLY_GELU_ExhaustiveBFloat16) {
     // Convert to float32, filtering special values and subnormals
     std::vector<float> input_data(bf16_count);
     for (size_t i = 0; i < bf16_count; ++i) {
-        if (is_special_bf16(bf16_bits[i]) || is_subnormal_bf16(bf16_bits[i])) {
+        if (is_special_bf16(bf16_bits[i]) || bf16_ulp::bf16_is_subnormal(bf16_bits[i])) {
             input_data[i] = 0.0f;  // Set specials/subnormals to 0
         } else {
-            input_data[i] = bf16_bits_to_float32(bf16_bits[i]);
+            input_data[i] = bf16_ulp::bf16_bits_to_float32(bf16_bits[i]);
         }
     }
 
@@ -1080,11 +1031,11 @@ TEST_F(GELUOpTest, DISABLED_GELU_ULP_DiagnosticDataCollection) {
         uint16_t bf16_bits = static_cast<uint16_t>(bits);
 
         // Skip special values (NaN, Inf) and subnormals
-        if (is_special_bf16(bf16_bits) || is_subnormal_bf16(bf16_bits)) {
+        if (is_special_bf16(bf16_bits) || bf16_ulp::bf16_is_subnormal(bf16_bits)) {
             continue;
         }
 
-        float value = bf16_bits_to_float32(bf16_bits);
+        float value = bf16_ulp::bf16_bits_to_float32(bf16_bits);
 
         // Skip if conversion gives non-finite result
         if (!std::isfinite(value)) {
