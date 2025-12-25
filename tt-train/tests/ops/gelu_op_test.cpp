@@ -1174,3 +1174,523 @@ TEST_F(GELUOpTest, DISABLED_GELU_ULP_DiagnosticDataCollection) {
     // Test always passes - it's just for data collection
     EXPECT_TRUE(true);
 }
+
+// ----------------------------------------------------------------------------
+// Diagnostic Test: ULP Spike Analysis by Input Region
+// ----------------------------------------------------------------------------
+
+TEST_F(GELUOpTest, DISABLED_GELU_ULP_SpikeAnalysis) {
+    // Diagnostic test: Analyzes ULP error distribution by input value regions
+    // Helps understand where the "scary spikes" in the ULP plot come from
+    // Use: ./ttml_tests --gtest_filter="*DISABLED_GELU_ULP_SpikeAnalysis*" --gtest_also_run_disabled_tests
+
+    using namespace ttml;
+
+    std::cout << "\n=== GELU ULP Spike Analysis ===" << std::endl;
+
+    // Collect all valid bf16 values
+    std::vector<std::tuple<float, uint16_t>> valid_values;
+
+    for (uint32_t bits = 0; bits < 65536; ++bits) {
+        uint16_t bf16_bits = static_cast<uint16_t>(bits);
+        if (is_special_bf16(bf16_bits) || bf16_ulp::bf16_is_subnormal(bf16_bits)) {
+            continue;
+        }
+        float value = bf16_ulp::bf16_bits_to_float32(bf16_bits);
+        if (!std::isfinite(value)) {
+            continue;
+        }
+        valid_values.emplace_back(value, bf16_bits);
+    }
+
+    // Sort by float value
+    std::sort(valid_values.begin(), valid_values.end(), [](const auto& a, const auto& b) {
+        return std::get<0>(a) < std::get<0>(b);
+    });
+
+    // Prepare input tensor
+    const size_t num_values = valid_values.size();
+    const uint32_t height = static_cast<uint32_t>((num_values + 1023) / 1024);
+    const uint32_t width = 1024;
+    const uint32_t actual_size = height * width;
+
+    std::vector<float> input_data(actual_size, 0.0f);
+    for (size_t i = 0; i < num_values; ++i) {
+        input_data[i] = std::get<0>(valid_values[i]);
+    }
+
+    std::cout << "Valid bf16 values: " << num_values << std::endl;
+    std::cout << "Tensor shape: [1, 1, " << height << ", " << width << "]" << std::endl;
+
+    // Run GELU on hardware
+    auto input = autograd::create_tensor(
+        core::from_vector(input_data, ttnn::Shape{1, 1, height, width}, &autograd::ctx().get_device()));
+
+    auto result = ops::gelu(input);
+    auto result_data = core::to_vector(result->get_value());
+
+    // Define analysis regions
+    struct Region {
+        std::string name;
+        float min_val;
+        float max_val;
+        size_t count = 0;
+        size_t ulp_0 = 0;
+        size_t ulp_1 = 0;
+        size_t ulp_2 = 0;
+        size_t ulp_gt2 = 0;
+        size_t ulp_gt100 = 0;
+        uint32_t max_ulp = 0;
+        float worst_input = 0;
+        float worst_computed = 0;
+        float worst_expected = 0;
+    };
+
+    std::vector<Region> regions = {
+        {"Neg extreme (<-100)", -std::numeric_limits<float>::max(), -100.0f},
+        {"Neg large (-100,-10)", -100.0f, -10.0f},
+        {"Neg medium (-10,-3)", -10.0f, -3.0f},
+        {"Neg active (-3,-1)", -3.0f, -1.0f},
+        {"Near zero (-1,1)", -1.0f, 1.0f},
+        {"Pos active (1,3)", 1.0f, 3.0f},
+        {"Pos medium (3,10)", 3.0f, 10.0f},
+        {"Pos large (10,100)", 10.0f, 100.0f},
+        {"Pos extreme (>100)", 100.0f, std::numeric_limits<float>::max()},
+    };
+
+    // Analyze each value
+    for (size_t i = 0; i < num_values; ++i) {
+        float input_val = std::get<0>(valid_values[i]);
+        float computed = result_data[i];
+
+        // Reference GELU
+        const float sqrt2 = std::sqrt(2.0f);
+        float expected_f32 = 0.5f * input_val * (1.0f + std::erf(input_val / sqrt2));
+        float expected_bf16 = quantize_to_bf16(expected_f32);
+
+        uint32_t ulp = ulp_distance_bf16(computed, expected_bf16);
+
+        // Find which region this belongs to
+        for (auto& r : regions) {
+            if (input_val >= r.min_val && input_val < r.max_val) {
+                r.count++;
+                if (ulp == 0)
+                    r.ulp_0++;
+                else if (ulp == 1)
+                    r.ulp_1++;
+                else if (ulp == 2)
+                    r.ulp_2++;
+                else
+                    r.ulp_gt2++;
+
+                if (ulp > 100)
+                    r.ulp_gt100++;
+
+                if (ulp > r.max_ulp) {
+                    r.max_ulp = ulp;
+                    r.worst_input = input_val;
+                    r.worst_computed = computed;
+                    r.worst_expected = expected_bf16;
+                }
+                break;
+            }
+        }
+    }
+
+    // Print results
+    std::cout << "\n=== ULP Distribution by Input Region ===" << std::endl;
+    std::cout << std::left << std::setw(22) << "Region" << std::right << std::setw(8) << "Count" << std::setw(10)
+              << "ULP=0%" << std::setw(10) << "ULP>2%" << std::setw(12) << "ULP>100" << std::setw(10) << "MaxULP"
+              << std::endl;
+    std::cout << std::string(72, '-') << std::endl;
+
+    for (const auto& r : regions) {
+        if (r.count == 0)
+            continue;
+        double pct_0 = 100.0 * r.ulp_0 / r.count;
+        double pct_gt2 = 100.0 * r.ulp_gt2 / r.count;
+        std::cout << std::left << std::setw(22) << r.name << std::right << std::setw(8) << r.count << std::setw(9)
+                  << std::fixed << std::setprecision(1) << pct_0 << "%" << std::setw(9) << pct_gt2 << "%"
+                  << std::setw(12) << r.ulp_gt100 << std::setw(10) << r.max_ulp << std::endl;
+    }
+
+    // Print worst cases per region
+    std::cout << "\n=== Worst Case per Region ===" << std::endl;
+    for (const auto& r : regions) {
+        if (r.count == 0 || r.max_ulp == 0)
+            continue;
+        std::cout << r.name << ":" << std::endl;
+        std::cout << "  Input:    " << std::scientific << std::setprecision(6) << r.worst_input << std::endl;
+        std::cout << "  Computed: " << r.worst_computed << std::endl;
+        std::cout << "  Expected: " << r.worst_expected << std::endl;
+        std::cout << "  ULP:      " << r.max_ulp << std::endl;
+    }
+
+    // Detailed analysis of high-ULP values in active region
+    std::cout << "\n=== High ULP in GELU Active Region [-3, 3] ===" << std::endl;
+    std::vector<std::tuple<float, float, float, uint32_t>> active_high_ulp;
+
+    for (size_t i = 0; i < num_values; ++i) {
+        float input_val = std::get<0>(valid_values[i]);
+        if (input_val < -3.0f || input_val > 3.0f)
+            continue;
+
+        float computed = result_data[i];
+        const float sqrt2 = std::sqrt(2.0f);
+        float expected_f32 = 0.5f * input_val * (1.0f + std::erf(input_val / sqrt2));
+        float expected_bf16 = quantize_to_bf16(expected_f32);
+        uint32_t ulp = ulp_distance_bf16(computed, expected_bf16);
+
+        if (ulp > 2) {
+            active_high_ulp.emplace_back(input_val, computed, expected_bf16, ulp);
+        }
+    }
+
+    std::sort(active_high_ulp.begin(), active_high_ulp.end(), [](const auto& a, const auto& b) {
+        return std::get<3>(a) > std::get<3>(b);
+    });
+
+    std::cout << "Values with ULP > 2 in [-3, 3]: " << active_high_ulp.size() << std::endl;
+    size_t show_count = std::min(active_high_ulp.size(), size_t(15));
+    for (size_t i = 0; i < show_count; ++i) {
+        auto [inp, comp, exp, ulp] = active_high_ulp[i];
+        std::cout << "  x=" << std::fixed << std::setprecision(6) << inp << "  computed=" << comp
+                  << "  expected=" << exp << "  ULP=" << ulp << std::endl;
+    }
+
+    EXPECT_TRUE(true);
+}
+
+// ----------------------------------------------------------------------------
+// Diagnostic Test: Complete ULP Spike Report (Markdown Output)
+// ----------------------------------------------------------------------------
+
+TEST_F(GELUOpTest, DISABLED_GELU_ULP_SpikeReport) {
+    // Diagnostic test: Generates markdown report of ALL bf16 values with ULP > 10
+    // Includes subnormals, excludes only NaN and Inf
+    // Output: /tmp/gelu_ulp_spikes.md
+    // Use: ./ttml_tests --gtest_filter="*DISABLED_GELU_ULP_SpikeReport*" --gtest_also_run_disabled_tests
+
+    using namespace ttml;
+
+    const std::string output_file = "/tmp/gelu_ulp_spikes.md";
+    std::cout << "\n=== GELU ULP Spike Report (All BF16 values, ULP > 10) ===" << std::endl;
+    std::cout << "Output file: " << output_file << std::endl;
+
+    // Collect ALL valid bf16 values (exclude only NaN and Inf, INCLUDE subnormals)
+    std::vector<std::pair<float, uint16_t>> all_values;
+
+    for (uint32_t bits = 0; bits < 65536; ++bits) {
+        uint16_t bf16_bits = static_cast<uint16_t>(bits);
+
+        // Skip only NaN and Inf
+        if (bf16_ulp::bf16_is_nan(bf16_bits) || bf16_ulp::bf16_is_inf(bf16_bits)) {
+            continue;
+        }
+
+        float value = bf16_ulp::bf16_bits_to_float32(bf16_bits);
+        all_values.emplace_back(value, bf16_bits);
+    }
+
+    std::cout << "Total bf16 values (excl NaN/Inf): " << all_values.size() << std::endl;
+
+    // Sort by float value for consistent ordering
+    std::sort(all_values.begin(), all_values.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    // Prepare input tensor (pad to tile-aligned size)
+    const size_t num_values = all_values.size();
+    const uint32_t width = 1024;
+    const uint32_t height = static_cast<uint32_t>((num_values + width - 1) / width);
+    const uint32_t actual_size = height * width;
+
+    std::vector<float> input_data(actual_size, 0.0f);
+    for (size_t i = 0; i < num_values; ++i) {
+        input_data[i] = all_values[i].first;
+    }
+
+    std::cout << "Tensor shape: [1, 1, " << height << ", " << width << "]" << std::endl;
+    std::cout << "Running GELU on hardware..." << std::endl;
+
+    // Run GELU on hardware
+    auto input = autograd::create_tensor(
+        core::from_vector(input_data, ttnn::Shape{1, 1, height, width}, &autograd::ctx().get_device()));
+
+    auto result = ops::gelu(input);
+    auto result_data = core::to_vector(result->get_value());
+
+    // Collect all spikes (ULP > 10)
+    struct SpikeData {
+        float input_value;
+        uint16_t bf16_bits;
+        float computed;
+        float expected_f32;
+        float expected_bf16;
+        uint32_t ulp;
+        float abs_diff;
+        bool is_subnormal;
+    };
+
+    std::vector<SpikeData> spikes;
+    size_t subnormal_count = 0;
+    size_t total_ulp_gt10 = 0;
+
+    for (size_t i = 0; i < num_values; ++i) {
+        float input_val = all_values[i].first;
+        uint16_t bits = all_values[i].second;
+        float computed = result_data[i];
+
+        // Reference GELU (float64 for precision)
+        double x = static_cast<double>(input_val);
+        double sqrt2 = std::sqrt(2.0);
+        double expected_f64 = 0.5 * x * (1.0 + std::erf(x / sqrt2));
+        float expected_f32 = static_cast<float>(expected_f64);
+        float expected_bf16 = quantize_to_bf16(expected_f32);
+
+        uint32_t ulp = ulp_distance_bf16(computed, expected_bf16);
+        bool is_subnormal = bf16_ulp::bf16_is_subnormal(bits);
+
+        if (is_subnormal) {
+            subnormal_count++;
+        }
+
+        if (ulp > 10) {
+            total_ulp_gt10++;
+            float abs_diff = std::abs(computed - expected_bf16);
+            spikes.push_back({input_val, bits, computed, expected_f32, expected_bf16, ulp, abs_diff, is_subnormal});
+        }
+    }
+
+    // Sort by input value (argument) ascending
+    std::sort(spikes.begin(), spikes.end(), [](const auto& a, const auto& b) { return a.input_value < b.input_value; });
+
+    std::cout << "Subnormal values tested: " << subnormal_count << std::endl;
+    std::cout << "Values with ULP > 10: " << total_ulp_gt10 << std::endl;
+
+    // Write markdown report
+    std::ofstream md(output_file);
+
+    md << "# GELU ULP Spike Report\n\n";
+    md << "**Hardware:** Wormhole n150\n";
+    md << "**Date:** " << __DATE__ << " " << __TIME__ << "\n";
+    md << "**Total bf16 values tested:** " << num_values << " (excluding NaN/Inf)\n";
+    md << "**Subnormal values included:** " << subnormal_count << "\n";
+    md << "**Values with ULP > 10:** " << spikes.size() << "\n\n";
+
+    // Summary statistics
+    md << "## Summary\n\n";
+
+    // Count by ULP ranges
+    size_t ulp_11_100 = 0, ulp_101_1000 = 0, ulp_1001_10000 = 0, ulp_gt_10000 = 0;
+    for (const auto& s : spikes) {
+        if (s.ulp <= 100)
+            ulp_11_100++;
+        else if (s.ulp <= 1000)
+            ulp_101_1000++;
+        else if (s.ulp <= 10000)
+            ulp_1001_10000++;
+        else
+            ulp_gt_10000++;
+    }
+
+    md << "| ULP Range | Count |\n";
+    md << "|-----------|-------|\n";
+    md << "| 11-100 | " << ulp_11_100 << " |\n";
+    md << "| 101-1000 | " << ulp_101_1000 << " |\n";
+    md << "| 1001-10000 | " << ulp_1001_10000 << " |\n";
+    md << "| >10000 | " << ulp_gt_10000 << " |\n\n";
+
+    // Group spikes by input magnitude to identify patterns
+    md << "## Spike Distribution by Input Magnitude\n\n";
+
+    struct MagBucket {
+        std::string name;
+        double min_abs;
+        double max_abs;
+        size_t count = 0;
+        uint32_t max_ulp = 0;
+    };
+
+    std::vector<MagBucket> mag_buckets = {
+        {"Subnormal (1e-45 to 1e-38)", 0, 1.18e-38, 0, 0},
+        {"Tiny (1e-38 to 1e-10)", 1.18e-38, 1e-10, 0, 0},
+        {"Very small (1e-10 to 1e-3)", 1e-10, 1e-3, 0, 0},
+        {"Small (1e-3 to 0.1)", 1e-3, 0.1, 0, 0},
+        {"Near zero (0.1 to 1)", 0.1, 1.0, 0, 0},
+        {"Active (1 to 3)", 1.0, 3.0, 0, 0},
+        {"Saturation (3 to 10)", 3.0, 10.0, 0, 0},
+        {"Large (>10)", 10.0, 1e40, 0, 0},
+    };
+
+    for (const auto& s : spikes) {
+        double abs_val = std::abs(s.input_value);
+        for (auto& b : mag_buckets) {
+            if (abs_val >= b.min_abs && abs_val < b.max_abs) {
+                b.count++;
+                b.max_ulp = std::max(b.max_ulp, s.ulp);
+                break;
+            }
+        }
+    }
+
+    md << "| Magnitude Range | Spike Count | Max ULP |\n";
+    md << "|-----------------|-------------|----------|\n";
+    for (const auto& b : mag_buckets) {
+        if (b.count > 0) {
+            md << "| " << b.name << " | " << b.count << " | " << b.max_ulp << " |\n";
+        }
+    }
+    md << "\n";
+
+    // Full spike table
+    md << "## All Spikes (ULP > 10), Sorted by Input Value\n\n";
+    md << "| # | Input (hex) | Input (float) | Computed | Expected (bf16) | ULP | Abs Diff | Subnormal |\n";
+    md << "|---|-------------|---------------|----------|-----------------|-----|----------|----------|\n";
+
+    for (size_t i = 0; i < spikes.size(); ++i) {
+        const auto& s = spikes[i];
+        md << "| " << (i + 1) << " | 0x" << std::hex << std::setw(4) << std::setfill('0') << s.bf16_bits << std::dec
+           << " | " << std::scientific << std::setprecision(6) << s.input_value << " | " << s.computed << " | "
+           << s.expected_bf16 << " | " << s.ulp << " | " << s.abs_diff << " | " << (s.is_subnormal ? "Yes" : "No")
+           << " |\n";
+    }
+
+    md.close();
+
+    std::cout << "\nMarkdown report written to: " << output_file << std::endl;
+    std::cout << "View with: cat " << output_file << " | head -100" << std::endl;
+
+    // Print top 20 to console
+    std::cout << "\n=== Top 20 Spikes ===" << std::endl;
+    std::cout << std::left << std::setw(12) << "Input(hex)" << std::setw(16) << "Input(float)" << std::setw(14)
+              << "Computed" << std::setw(14) << "Expected" << std::setw(8) << "ULP" << "Subnorm" << std::endl;
+    std::cout << std::string(70, '-') << std::endl;
+
+    for (size_t i = 0; i < std::min(spikes.size(), size_t(20)); ++i) {
+        const auto& s = spikes[i];
+        std::cout << "0x" << std::hex << std::setw(4) << std::setfill('0') << s.bf16_bits << std::dec << "    "
+                  << std::scientific << std::setprecision(4) << std::setw(14) << s.input_value << std::setw(14)
+                  << s.computed << std::setw(14) << s.expected_bf16 << std::setw(8) << s.ulp
+                  << (s.is_subnormal ? "Yes" : "No") << std::endl;
+    }
+
+    EXPECT_TRUE(true);
+}
+
+// ----------------------------------------------------------------------------
+// Diagnostic Test: Analyze GELU Output Floor Value
+// ----------------------------------------------------------------------------
+
+TEST_F(GELUOpTest, DISABLED_GELU_ULP_FloorAnalysis) {
+    // Diagnostic test: Investigates the constant floor value observed in GELU outputs
+    // for tiny inputs. Hardware outputs ~2.98e-05 instead of correct ~5.88e-39.
+    // This appears to be a bug - bfloat16 should preserve the dynamic range.
+    // Use: ./ttml_tests --gtest_filter="*DISABLED_GELU_ULP_FloorAnalysis*" --gtest_also_run_disabled_tests
+
+    using namespace ttml;
+
+    std::cout << "\n=== GELU Output Floor Analysis ===" << std::endl;
+    std::cout << "Investigating constant output value for tiny inputs\n" << std::endl;
+
+    // The observed constant output value
+    constexpr float OBSERVED_FLOOR = 2.980232e-05f;
+
+    // Analyze the floor value in bf16
+    uint16_t floor_bits = bf16_ulp::float32_to_bf16_bits(OBSERVED_FLOOR);
+    uint16_t floor_exp = (floor_bits >> 7) & 0xFF;
+    uint16_t floor_mant = floor_bits & 0x7F;
+
+    std::cout << "Observed floor value: " << std::scientific << OBSERVED_FLOOR << std::endl;
+    std::cout << "  BF16 bits: 0x" << std::hex << std::setw(4) << std::setfill('0') << floor_bits << std::dec
+              << std::endl;
+    std::cout << "  Exponent (biased): " << floor_exp << ", actual: " << (static_cast<int>(floor_exp) - 127)
+              << std::endl;
+    std::cout << "  Mantissa: 0x" << std::hex << floor_mant << std::dec << " = " << floor_mant << "/128" << std::endl;
+
+    // Check what power of 2 this is close to
+    std::cout << "\nReference values:" << std::endl;
+    std::cout << "  2^-15 = " << std::scientific << std::pow(2.0f, -15) << std::endl;
+    std::cout << "  2^-16 = " << std::pow(2.0f, -16) << std::endl;
+    std::cout << "  Smallest normal bf16 = " << bf16_ulp::bf16_bits_to_float32(0x0080) << std::endl;
+
+    // Test a range of tiny inputs to see if they all produce the same floor
+    std::cout << "\n=== Testing tiny inputs ===" << std::endl;
+
+    std::vector<float> test_inputs;
+    // Add smallest normal bf16 values
+    for (uint16_t bits = 0x0080; bits <= 0x00FF; bits += 0x10) {
+        test_inputs.push_back(bf16_ulp::bf16_bits_to_float32(bits));
+    }
+    // Add some subnormals
+    for (uint16_t bits = 0x0001; bits <= 0x007F; bits += 0x10) {
+        test_inputs.push_back(bf16_ulp::bf16_bits_to_float32(bits));
+    }
+    // Add negative versions
+    size_t pos_count = test_inputs.size();
+    for (size_t i = 0; i < pos_count; ++i) {
+        test_inputs.push_back(-test_inputs[i]);
+    }
+
+    // Pad to tile alignment
+    while (test_inputs.size() % 32 != 0) {
+        test_inputs.push_back(0.0f);
+    }
+
+    auto input = autograd::create_tensor(core::from_vector(
+        test_inputs, ttnn::Shape{1, 1, 1, static_cast<uint32_t>(test_inputs.size())}, &autograd::ctx().get_device()));
+
+    auto result = ops::gelu(input);
+    auto result_data = core::to_vector(result->get_value());
+
+    std::cout << std::left << std::setw(16) << "Input" << std::setw(16) << "Computed" << std::setw(16) << "Expected"
+              << std::setw(12) << "Match Floor?" << std::endl;
+    std::cout << std::string(60, '-') << std::endl;
+
+    size_t floor_matches = 0;
+    for (size_t i = 0; i < test_inputs.size(); ++i) {
+        if (test_inputs[i] == 0.0f)
+            continue;
+
+        float input_val = test_inputs[i];
+        float computed = result_data[i];
+
+        // Expected GELU
+        double x = static_cast<double>(input_val);
+        double sqrt2 = std::sqrt(2.0);
+        float expected = static_cast<float>(0.5 * x * (1.0 + std::erf(x / sqrt2)));
+
+        bool matches_floor = (std::abs(computed) == OBSERVED_FLOOR) || (std::abs(computed - OBSERVED_FLOOR) < 1e-10f);
+        if (matches_floor)
+            floor_matches++;
+
+        std::cout << std::scientific << std::setprecision(3) << std::setw(16) << input_val << std::setw(16) << computed
+                  << std::setw(16) << expected << (matches_floor ? "YES" : "no") << std::endl;
+    }
+
+    std::cout << "\n=== Summary ===" << std::endl;
+    std::cout << "Inputs tested: " << test_inputs.size() << std::endl;
+    std::cout << "Outputs matching floor value: " << floor_matches << std::endl;
+
+    // Check unique output values
+    std::set<float> unique_outputs;
+    for (size_t i = 0; i < test_inputs.size(); ++i) {
+        if (test_inputs[i] != 0.0f) {
+            unique_outputs.insert(std::abs(result_data[i]));
+        }
+    }
+    std::cout << "Unique |output| values: " << unique_outputs.size() << std::endl;
+    std::cout << "Unique outputs: ";
+    for (float v : unique_outputs) {
+        std::cout << std::scientific << v << " ";
+    }
+    std::cout << std::endl;
+
+    // Analysis conclusion
+    std::cout << "\n=== Analysis ===" << std::endl;
+    if (floor_matches > test_inputs.size() / 2) {
+        std::cout << "FINDING: Hardware GELU has a floor/minimum output value of " << OBSERVED_FLOOR << std::endl;
+        std::cout << "This appears to be a bug - bf16 should support values down to ~1e-38" << std::endl;
+        std::cout << "The floor value 2.98e-05 ≈ 2^-15.04 suggests a clamping in the implementation" << std::endl;
+    }
+
+    EXPECT_TRUE(true);
+}
