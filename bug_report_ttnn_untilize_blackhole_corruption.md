@@ -1,11 +1,11 @@
 # Bug Report: ttnn::untilize Data Corruption on Blackhole P150
 
-**Status**: WORKAROUND FOUND - Still requires fix for performance
+**Status**: LIKELY HARDWARE BUG - Workaround available, fix attempts exhausted
 **Severity**: Critical
 **Component**: tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_pack_untilize.h
 **Hardware**: Blackhole P150
 **Branch**: `ivoitovych/tt-train-untilize-blackhole-bug-2`
-**Date**: 2025-12-17 (Updated - Session 5)
+**Date**: 2025-12-27 (Updated - Session 10)
 
 ---
 
@@ -682,3 +682,52 @@ These values (e.g., 3201515335) are the result of argmax operating on corrupted 
 | 2025-12-16 | Investigation Team | Fix attempts 4-6, comprehensive documentation |
 | 2025-12-17 | Investigation Team | **Session 4**: Attempt 7 (Wormhole-style port) - DEVICE HUNG. Investigation blocked. |
 | 2025-12-17 | Investigation Team | **Session 5**: **WORKAROUND FOUND!** Discovered BFloat16 precision masking real bug. Slow path (`use_pack_untilize=False`) works correctly. Identified second bug (argmax on untilized tensors). Status changed from BLOCKED to WORKAROUND AVAILABLE. |
+| 2025-12-17 | Investigation Team | **Session 6**: Started fixing fast path instead of using workaround. |
+| 2025-12-18 | Investigation Team | **Session 7-8**: Partial fix achieved - dual L1 addresses + set_packer_strides makes face pair 0 work. Face pair 1 rows 21-31 still corrupted. DST_ACCESS_STRIDED_MODE confirmed required for multi-tile cases. |
+| 2025-12-27 | Investigation Team | **Session 9-10**: Exhaustive testing of all remaining software fixes. All failed. Strong evidence points to Blackhole packer hardware bug for counter combination z=1, y>=5. Status changed to LIKELY HARDWARE BUG. |
+
+---
+
+## Session 6-10 Updates: Partial Fix and Hardware Bug Evidence
+
+### Partial Fix Achieved (Session 7)
+
+Applied fixes to `llk_pack_untilize.h`:
+1. **Dual L1 addresses**: Set up OUTPUT_ADDR and OUTPUT_ADDR+1 for both packer interfaces
+2. **Proper z_stride**: Added `set_packer_strides<true, false>()` call
+3. **Dual L1 update in replay buffer**: Updated both THCON_SEC0_REG1 and THCON_SEC0_REG8
+
+**Results after partial fix:**
+| Test Case | Result | Details |
+|-----------|--------|---------|
+| 8x64 (2 tiles) | **PASS** (0 errors) | Only uses face pair 0 (8 rows) |
+| 32x32 (1 tile, 4 faces) | FAIL (176 errors) | Rows 21-31 corrupted |
+| 32x64 (2 tiles) | FAIL (360 errors) | Rows 20-31 corrupted |
+
+Face pair 0 (rows 0-15) works completely. Face pair 1 rows 16-20 work, but rows 21-31 have "skip odd, duplicate even" pattern.
+
+### Session 10 Exhaustive Testing (All Failed)
+
+1. ✗ Set up all 4 L1 addresses (SEC0 + SEC1) - no change
+2. ✗ Update replay buffer for all 4 addresses - no change
+3. ✗ Configure channel 1 z_stride - no change
+4. ✗ Use regular pack's addr_mod configuration - no change
+5. ✗ Complete counter reset before face pair 1 - no change
+
+### Evidence Supporting Hardware Bug
+
+1. **Corruption is position-specific** (z=1, y>=5), not configuration-dependent
+2. **All software fixes have no effect** on the corruption pattern
+3. Face pair 0 (z=0) works correctly for all 16 rows
+4. Face pair 1 (z=1) works for rows 0-4 but fails at row 5+
+5. **The slow path works correctly** (uses different HW path: unpack+pack instead of pack_untilize)
+
+### Conclusion
+
+The remaining corruption in face pair 1 rows 5-15 (global rows 21-31) appears to be a **hardware bug in the Blackhole packer** where specific counter value combinations (z=1 AND y>=5) cause incorrect DEST addressing during TWO_INTFS_ACTIVE mode.
+
+### Recommendations
+
+1. **Use workaround**: `use_pack_untilize=False` for Blackhole with 4-face tiles
+2. **File hardware bug report** with Tenstorrent describing the specific counter combination
+3. **Investigate if newer Blackhole firmware/silicon has a fix**
