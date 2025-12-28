@@ -3,8 +3,10 @@
 This document provides a complete, fact-based reference to the GELU activation function implementation in tt-metal. All information is traceable to source code with exact file paths and line numbers.
 
 **Document Version:** 2025-12-27
-**Hardware:** Wormhole n150 L
+**Hardware:** Wormhole n150 L (Blackhole implementations are identical)
 **Branch:** `ivoitovych/bert-model-for-ttml-pr-gelu-test-suite-amendment-ulp-diagnostic-04`
+
+**Architecture Note:** Wormhole B0 and Blackhole share identical GELU implementations. All file paths shown are for Wormhole B0; Blackhole equivalents exist at the same relative paths under `blackhole/` instead of `wormhole_b0/`.
 
 ---
 
@@ -455,6 +457,177 @@ def gelu_backward_exact(grad_output: np.ndarray, x: np.ndarray) -> np.ndarray:
     return grad_output * (cdf_term + pdf_term)
 ```
 
+### Forward GELU (Accurate Mode) - C++ Reference
+
+```cpp
+#include <cmath>
+#include <vector>
+
+// Chebyshev coefficients from ckernel_sfpu_gelu.h:36-52
+constexpr float CHEBYSHEV_COEFFS[16] = {
+    -1.81205228163e-09f,   // c15
+    -4.59055119276e-08f,   // c14
+    -3.74540617693e-07f,   // c13
+    -2.29754133825e-07f,   // c12
+    1.19076782913e-05f,    // c11
+    4.25116466215e-05f,    // c10
+    -0.000138391838381f,   // c9
+    -0.000862052441087f,   // c8
+    0.000768340223025f,    // c7
+    0.0092074331601f,      // c6
+    -0.00208478037614f,    // c5
+    -0.0656369476513f,     // c4
+    0.00244542739174f,     // c3
+    0.398579460781f,       // c2
+    0.499174645395f,       // c1
+    2.98325768482e-05f,    // c0
+};
+
+// Horner's method polynomial evaluation (matches POLYVAL15 macro)
+inline float polyval15(float x) {
+    float result = 0.0f;
+    for (int i = 0; i < 16; ++i) {
+        result = result * x + CHEBYSHEV_COEFFS[i];
+    }
+    return result;
+}
+
+/**
+ * Reproduces the Tenstorrent hardware GELU (accurate mode).
+ *
+ * Algorithm from: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h
+ */
+float gelu_chebyshev(float x) {
+    if (x == 0.0f) {
+        return 0.0f;
+    }
+    if (x >= 3.0f) {
+        return x;  // Identity for large positive values
+    }
+    if (x < -5.5f) {
+        return 0.0f;  // Zero for large negative values
+    }
+    // Apply Chebyshev polynomial with sign correction
+    float poly = polyval15(x);
+    return std::copysign(std::abs(poly), x);
+}
+
+// Exact GELU for comparison
+float gelu_exact(float x) {
+    return 0.5f * x * (1.0f + std::erf(x / std::sqrt(2.0f)));
+}
+```
+
+### Forward GELU (Fast Mode) - C++ Reference
+
+```cpp
+#include <cmath>
+
+// LUT coefficients from ckernel_sfpu_gelu.h:205-212
+// Format: {max_abs_x, slope_A, intercept_B}
+constexpr float LUT_SEGMENTS[6][3] = {
+    {0.5f, 0.1928f, -0.0150f},
+    {1.0f, 0.4939f, -0.1605f},
+    {1.5f, 0.6189f, -0.2797f},
+    {2.0f, 0.6099f, -0.2635f},
+    {3.0f, 0.5402f, -0.1194f},
+    {INFINITY, 0.5000f, 0.0f},
+};
+
+/**
+ * Reproduces the Tenstorrent hardware GELU (fast/LUT mode).
+ *
+ * Algorithm from: tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_gelu.h
+ * Formula: GELU(x) = 0.5*x + sign(x) * (A*|x| + B)
+ */
+float gelu_lut(float x) {
+    float abs_x = std::abs(x);
+    float sign_x = (x >= 0.0f) ? 1.0f : -1.0f;
+
+    // Find appropriate LUT segment
+    float A = 0.5f, B = 0.0f;
+    for (const auto& seg : LUT_SEGMENTS) {
+        if (abs_x < seg[0]) {
+            A = seg[1];
+            B = seg[2];
+            break;
+        }
+    }
+
+    // lut2_sign(x) = sign(x) * (A * |x| + B)
+    float lut_result = sign_x * (A * abs_x + B);
+
+    // result = 0.5 * x + lut_result
+    return 0.5f * x + lut_result;
+}
+```
+
+### Backward GELU (Exact Mode) - C++ Reference
+
+```cpp
+#include <cmath>
+
+/**
+ * Reproduces the Tenstorrent hardware GELU backward (exact/erf mode).
+ *
+ * Algorithm from: ttnn/.../eltwise_bw_gelu_approx_none.cpp
+ *
+ * @param grad_output Upstream gradient (dL/dy)
+ * @param x           Original input to forward GELU
+ * @return            Input gradient (dL/dx)
+ */
+float gelu_backward_exact(float grad_output, float x) {
+    constexpr float kAlpha = 0.70710678118654752440f;  // 1 / sqrt(2)
+    constexpr float kBeta = 0.3989422804014327f;       // 1 / sqrt(2 * pi)
+
+    // CDF term: 0.5 * (1 + erf(x / sqrt(2)))
+    float cdf_term = 0.5f * (1.0f + std::erf(x * kAlpha));
+
+    // PDF term: x * (1 / sqrt(2*pi)) * exp(-x^2 / 2)
+    float pdf_term = x * kBeta * std::exp(-0.5f * x * x);
+
+    // grad_input = grad_output * (CDF + PDF)
+    return grad_output * (cdf_term + pdf_term);
+}
+```
+
+### Backward GELU (Approximate Mode) - C++ Reference
+
+```cpp
+#include <cmath>
+
+/**
+ * Reproduces the Tenstorrent hardware GELU backward (approximate/tanh mode).
+ *
+ * Algorithm from: ttnn/.../eltwise_bw_gelu_approx_tanh.cpp
+ *
+ * NOT used by tt-train, provided for completeness.
+ */
+float gelu_backward_tanh(float grad_output, float x) {
+    constexpr float kBeta = 0.7978845608028654f;   // sqrt(2/pi)
+    constexpr float kKappa = 0.044715f;
+
+    // inner = beta * (x + kappa * x^3)
+    float x_cubed = x * x * x;
+    float inner = kBeta * (x + kKappa * x_cubed);
+
+    // tanh_inner = tanh(inner)
+    float tanh_inner = std::tanh(inner);
+
+    // CDF_term = 0.5 * (1 + tanh(inner))
+    float cdf_term = 0.5f * (1.0f + tanh_inner);
+
+    // sech^2(inner) = 1 - tanh^2(inner)
+    float sech_sq = 1.0f - tanh_inner * tanh_inner;
+
+    // PDF_term = 0.5 * beta * (1 + 3*kappa*x^2) * sech^2(inner)
+    float pdf_term = 0.5f * kBeta * (1.0f + 3.0f * kKappa * x * x) * sech_sq;
+
+    // grad_input = grad_output * (CDF_term + x * PDF_term)
+    return grad_output * (cdf_term + x * pdf_term);
+}
+```
+
 ---
 
 ## 8. Known Precision Characteristics
@@ -494,8 +667,8 @@ See `gelu_precision_analysis.md` for detailed ULP analysis.
 
 | File | Lines | Description |
 |------|-------|-------------|
-| `ttnn/.../gelu_backward/.../eltwise_bw_gelu_approx_none.cpp` | 30-91 | Exact erf-based backward |
-| `ttnn/.../gelu_backward/.../eltwise_bw_gelu_approx_tanh.cpp` | 19-106 | Approximate tanh-based backward |
+| `ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/kernels/compute/eltwise_bw_gelu_approx_none.cpp` | 30-91 | Exact erf-based backward |
+| `ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/kernels/compute/eltwise_bw_gelu_approx_tanh.cpp` | 19-106 | Approximate tanh-based backward |
 
 ### tt-train Usage
 
