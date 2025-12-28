@@ -1,327 +1,540 @@
 # GELU Implementation Reference for Tenstorrent Hardware
 
-This document provides a comprehensive reference to the GELU activation function implementation in tt-metal, including file locations, code paths, mathematical formulas, and known precision characteristics.
+This document provides a complete, fact-based reference to the GELU activation function implementation in tt-metal. All information is traceable to source code with exact file paths and line numbers.
 
-## Mathematical Definition
-
-**Exact GELU:**
-```
-GELU(x) = 0.5 * x * (1 + erf(x / sqrt(2)))
-```
-
-**Tanh Approximation:**
-```
-GELU_approx(x) = 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
-```
-
-**Derivative (Backward):**
-```
-GELU'(x) = CDF(x) + x * PDF(x)
-where:
-  CDF(x) = 0.5 * (1 + erf(x / sqrt(2)))
-  PDF(x) = exp(-0.5 * x^2) / sqrt(2 * pi)
-```
+**Document Version:** 2025-12-27
+**Hardware:** Wormhole n150 L
+**Branch:** `ivoitovych/bert-model-for-ttml-pr-gelu-test-suite-amendment-ulp-diagnostic-04`
 
 ---
 
-## Implementation File Locations
+## Table of Contents
 
-### Core SFPU Kernel (Hardware Level)
-
-| Architecture | File Path | Key Lines |
-|--------------|-----------|-----------|
-| Wormhole B0 (Metal) | `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h` | 33-89 |
-| Wormhole B0 (TT-LLK) | `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_gelu.h` | 17-213 |
-| Blackhole (Metal) | `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h` | 33-89 |
-| Blackhole (TT-LLK) | `tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_gelu.h` | 17-213 |
-
-### Supporting Functions
-
-| Function | File Path | Key Lines |
-|----------|-----------|-----------|
-| CDF Approximation | `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_cdf.h` | 15-72 |
-| ERF Approximation | `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_erf_erfc.h` | 19-32 |
-
-### TTNN Operation Interface
-
-| Component | File Path | Key Lines |
-|-----------|-----------|-----------|
-| Operation Type Enum | `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_types.hpp` | 23 |
-| Compute API | `tt_metal/include/compute_kernel_api/eltwise_unary/gelu.h` | 18-41 |
-
-### Backward Pass Kernels
-
-| Mode | File Path |
-|------|-----------|
-| Exact (erf-based) | `ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/kernels/compute/eltwise_bw_gelu_approx_none.cpp` |
-| Approximate (tanh-based) | `ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/kernels/compute/eltwise_bw_gelu_approx_tanh.cpp` |
+1. [Summary: What tt-train Actually Uses](#1-summary-what-tt-train-actually-uses)
+2. [Implementation Count](#2-implementation-count)
+3. [Forward Pass: Accurate Mode (Chebyshev)](#3-forward-pass-accurate-mode-chebyshev)
+4. [Forward Pass: Fast Mode (LUT)](#4-forward-pass-fast-mode-lut)
+5. [Backward Pass: Exact Mode (erf-based)](#5-backward-pass-exact-mode-erf-based)
+6. [Backward Pass: Approximate Mode (tanh-based)](#6-backward-pass-approximate-mode-tanh-based)
+7. [Reproducible Reference Implementations](#7-reproducible-reference-implementations)
+8. [Known Precision Characteristics](#8-known-precision-characteristics)
+9. [File Reference Table](#9-file-reference-table)
 
 ---
 
-## Implementation Modes
+## 1. Summary: What tt-train Actually Uses
 
-The GELU implementation supports two modes controlled by the `APPROXIMATION_MODE` template parameter:
+**tt-train/TTML uses exactly TWO implementations:**
 
-### Mode 1: Fast Approximation (`APPROXIMATION_MODE=true`)
+| Pass | Mode | Implementation | Default? |
+|------|------|----------------|----------|
+| Forward | Accurate | 15th-degree Chebyshev polynomial | **YES** |
+| Backward | Exact | erf-based with exp() | **YES** |
 
-Uses a 6-piece piecewise linear LUT (Look-Up Table) for maximum speed.
+**Evidence from source code:**
 
-**Formula:** `GELU_fast(x) = 0.5*x + LUT(x)`
-
-**LUT Coefficients** (from `_init_gelu_()` in `ckernel_sfpu_gelu.h:183-213`):
 ```cpp
-// LUT segments: slope (A) and intercept (B) pairs
-// x in [0.0, 0.5): A=0.1928, B=-0.0150
-// x in [0.5, 1.0): A=0.4939, B=-0.1605
-// x in [1.0, 1.5): A=0.6189, B=-0.2797
-// x in [1.5, 2.0): A=0.6099, B=-0.2635
-// x in [2.0, 3.0): A=0.5402, B=-0.1194
-// x >= 3.0:        A=0.50,   B=0.0
+// File: tt-train/sources/ttml/ops/unary_ops.cpp:37-49
+
+autograd::TensorPtr gelu(const autograd::TensorPtr& tensor) {
+    auto out = autograd::create_tensor();
+    out->set_value(ttnn::gelu(tensor->get_value()));  // Default: parameter=false
+    autograd::GradFunction grad = [tensor, out]() {
+        static const std::string approx_mode = "none";  // Uses exact erf-based mode
+        auto dL_dt = ttnn::experimental::gelu_bw(out->get_grad(), tensor->get_value(), approx_mode);
+        tensor->add_grad(dL_dt);
+    };
+    // ...
+}
 ```
 
-**Code Path:**
-```
-gelu_tile(fast_and_approx=true)
-  -> calculate_gelu<true>()
-    -> _calculate_gelu_<true>()
-      -> _calculate_gelu_appx_<ITERATIONS>()
-        -> lut2_sign() for 6-piece LUT lookup
-```
+**Default parameter verification:**
 
-### Mode 2: Accurate Mode (`APPROXIMATION_MODE=false`)
+```cpp
+// File: ttnn/cpp/ttnn/operations/eltwise/unary/unary.hpp:26-33
 
-Uses polynomial approximations for higher accuracy.
-
-**Implementation:** Uses CDF approximation with 5th-degree polynomial.
-
-**Code Path (TT-LLK):**
-```
-gelu_tile(fast_and_approx=false)
-  -> calculate_gelu<false>()
-    -> _calculate_gelu_<false>()
-      -> _calculate_gelu_accurate_<ITERATIONS>()
-        -> _calculate_cdf_appx_(in, scaled=true)
-          -> _calculate_pos_cdf_appx_(val)
-```
-
-**Code Path (Metal - Chebyshev):**
-```
-gelu_tile(fast_and_approx=false)
-  -> calculate_gelu<false>()
-    -> calculate_gelu_chebyshev(in)  // 15th-degree polynomial
+template <UnaryOpType unary_op_type>
+struct ExecuteUnaryWithFastAndApproximateMode {
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        bool parameter = false,  // <-- DEFAULT IS FALSE (accurate mode)
+        // ...
+    );
+};
 ```
 
 ---
 
-## Core Implementation Code
+## 2. Implementation Count
 
-### Chebyshev Polynomial (15th degree) - Metal Implementation
+**Total: 4 distinct implementations**
 
-**File:** `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h:33-61`
+| # | Pass | Mode Name | Algorithm | Used by tt-train? |
+|---|------|-----------|-----------|-------------------|
+| 1 | Forward | Accurate | Chebyshev polynomial (15th degree) | **YES** |
+| 2 | Forward | Fast | 6-piece piecewise linear LUT | No |
+| 3 | Backward | Exact | erf() + exp() based | **YES** |
+| 4 | Backward | Approximate | tanh() based | No |
+
+**Note:** There is also a CDF-polynomial implementation in TT-LLK (`_calculate_gelu_accurate_()`) but it is NOT used - the Metal kernel overrides it with Chebyshev for accurate mode.
+
+---
+
+## 3. Forward Pass: Accurate Mode (Chebyshev)
+
+**This is what tt-train uses for forward GELU.**
+
+### Source File
+
+`tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h`
+
+### Code Path
+
+```
+ttnn::gelu(tensor)                                    // unary.cpp:128-140
+  -> UnaryWithParam{GELU, 0.0f}                       // parameter=false (accurate mode)
+    -> gelu_tile<false>(idst)                         // gelu.h:38-41
+      -> calculate_gelu<false, 8>()                   // ckernel_sfpu_gelu.h:73-89
+        -> for each element in tile:
+             if (in == 0.0f): result = 0.0f
+             else if (in < 3.0f): result = calculate_gelu_chebyshev(in)
+             else: result = in  // identity for x >= 3.0
+```
+
+### Complete Algorithm (lines 73-89)
+
+```cpp
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+inline void calculate_gelu() {
+    if constexpr (APPROXIMATION_MODE) {
+        _calculate_gelu_<APPROXIMATION_MODE, ITERATIONS>();
+    } else {
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vFloat in = sfpi::dst_reg[0];
+            sfpi::vFloat result = in;
+            v_if(in == 0.0f) { result = 0.0f; }
+            v_elseif(in < 3.0f) { result = calculate_gelu_chebyshev(in); }
+            v_endif;
+            sfpi::dst_reg[0] = result;
+            sfpi::dst_reg++;
+        }
+    }
+}
+```
+
+### Chebyshev Polynomial (lines 33-61)
 
 ```cpp
 inline sfpi::vFloat calculate_gelu_chebyshev(sfpi::vFloat val) {
     sfpi::vFloat result = 0.0f;
     v_if(val >= -5.5f) {
         result = POLYVAL15(
-            -1.81205228163e-09,
-            -4.59055119276e-08,
-            -3.74540617693e-07,
-            -2.29754133825e-07,
-            1.19076782913e-05,
-            4.25116466215e-05,
-            -0.000138391838381,
-            -0.000862052441087,
-            0.000768340223025,
-            0.0092074331601,
-            -0.00208478037614,
-            -0.0656369476513,
-            0.00244542739174,
-            0.398579460781,
-            0.499174645395,
-            2.98325768482e-05,  // <-- NOTE: This is the floor value!
+            -1.81205228163e-09,   // c15
+            -4.59055119276e-08,   // c14
+            -3.74540617693e-07,   // c13
+            -2.29754133825e-07,   // c12
+            1.19076782913e-05,    // c11
+            4.25116466215e-05,    // c10
+            -0.000138391838381,   // c9
+            -0.000862052441087,   // c8
+            0.000768340223025,    // c7
+            0.0092074331601,      // c6
+            -0.00208478037614,    // c5
+            -0.0656369476513,     // c4
+            0.00244542739174,     // c3
+            0.398579460781,       // c2
+            0.499174645395,       // c1
+            2.98325768482e-05,    // c0 <-- Floor value for tiny inputs
             val);
-        result = setsgn(result, val);
+        result = setsgn(result, val);  // Preserve sign of input
     }
     v_endif;
     return result;
 }
 ```
 
-**Key Observation:** The constant term `2.98325768482e-05` in the Chebyshev polynomial corresponds to the floor value `0x37F9` discovered in precision analysis. For inputs close to zero, the polynomial evaluates to approximately this constant.
-
-### CDF Approximation - TT-LLK Implementation
-
-**File:** `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_cdf.h:15-72`
+### POLYVAL15 Macro (Horner's Method)
 
 ```cpp
-inline sfpi::vFloat _calculate_pos_cdf_appx_(sfpi::vFloat val) {
-    // Polynomial coefficients for x in [0, 2.5):
-    // [0.0122792, -0.05281024, -0.03048313, 0.41314081, 0.49866379]
-    sfpi::vFloat result;
-    v_if (val < 2.5f) {
-        result = POLYVAL5(0.0122792f, -0.05281024f, -0.03048313f,
-                          0.41314081f, 0.49866379f, val);
-    }
-    v_else {
-        // Linear approximation for x >= 2.5
-        result = 0.44656975f * val + 0.58216001f;
-    }
-    v_endif;
-
-    // Clamp to [0, 1]
-    v_if (result > 1.0f) { result = 1.0f; }
-    v_endif;
-    return result;
-}
-
-inline sfpi::vFloat _calculate_cdf_appx_(sfpi::vFloat val, bool scaled = false) {
-    sfpi::vFloat result = 0.0f;
-    v_if (val < 0.0f) {
-        result = 1.0f - _calculate_pos_cdf_appx_(-val);
-    }
-    v_else {
-        result = _calculate_pos_cdf_appx_(val);
-    }
-    v_endif;
-
-    if (scaled) {
-        result *= val;  // GELU = x * CDF(x/sqrt(2))
-    }
-    return result;
-}
+// File: ckernel_sfpu_gelu.h:13-31
+#define POLYVAL15(c15, c14, c13, c12, c11, c10, c9, c8, c7, c6, c5, c4, c3, c2, c1, c0, x) \
+    (((((((((((((((c15) * (x) + (c14)) * (x) + (c13)) * (x) + (c12)) * (x) + (c11)) \
+    * (x) + (c10)) * (x) + (c9)) * (x) + (c8)) * (x) + (c7)) * (x) + (c6)) \
+    * (x) + (c5)) * (x) + (c4)) * (x) + (c3)) * (x) + (c2)) * (x) + (c1)) * (x) + (c0))
 ```
 
-### ERF Approximation
+### Algorithm Summary
 
-**File:** `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_erf_erfc.h:19-32`
+For input `x`:
+1. If `x == 0.0`: return `0.0`
+2. If `x >= 3.0`: return `x` (GELU saturates to identity)
+3. If `x < -5.5`: return `0.0` (GELU saturates to zero)
+4. Otherwise: return `sign(x) * POLYVAL15(coefficients, x)`
 
-```cpp
-template <bool APPROXIMATION_MODE>
-sfpi_inline vFloat calculate_erf_body(vFloat x) {
-    // Piecewise polynomial approximation for erf(x), x >= 0
-    vFloat result = 1.0f;
-    v_if(x >= 3.0f) {
-        result = 1.0f;  // erf saturates to 1
-    }
-    v_elseif(x >= 1.0f) {
-        // 5th-degree polynomial for x in [1, 3)
-        result = POLYVAL5(-0.03170029f, 0.31310241f, -1.1603072f,
-                          1.91684792f, -0.19469693f, x);
-    }
-    v_elseif(x >= 0.0f) {
-        // 5th-degree polynomial for x in [0, 1)
-        result = POLYVAL5(0.166342190f, -0.476685015f, 0.0275416549,
-                          1.12544048f, 0.0000661338118f, x);
-    }
-    v_else {
-        result = 0.0f;
-    }
-    v_endif;
-    return result;
-}
+---
+
+## 4. Forward Pass: Fast Mode (LUT)
+
+**NOT used by tt-train (but available via `ttnn::gelu(tensor, true)`).**
+
+### Source File
+
+`tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_gelu.h`
+
+### Code Path
+
+```
+ttnn::gelu(tensor, true)                              // fast_and_approximate=true
+  -> UnaryWithParam{GELU, 1.0f}                       // parameter=true
+    -> gelu_tile<true>(idst)                          // gelu.h:38-41
+      -> calculate_gelu<true, 8>()                    // metal ckernel_sfpu_gelu.h:75-76
+        -> _calculate_gelu_<true, 8>()                // tt_llk ckernel_sfpu_gelu.h:100-111
+          -> _calculate_gelu_appx_<8>()               // tt_llk ckernel_sfpu_gelu.h:38-84
 ```
 
-### Fast LUT Approximation
-
-**File:** `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_gelu.h:38-84`
+### Algorithm (lines 38-84)
 
 ```cpp
 template <int ITERATIONS>
 inline void _calculate_gelu_appx_() {
-    // Load LUT coefficients from L-registers
+    // Load LUT coefficients from L-registers (initialized by _init_gelu_())
     sfpi::vUInt l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
-    sfpi::vUInt l1 = sfpi::l_reg[sfpi::LRegs::LReg1];
-    sfpi::vUInt l2 = sfpi::l_reg[sfpi::LRegs::LReg2];
-    sfpi::vUInt l4 = sfpi::l_reg[sfpi::LRegs::LReg4];
-    sfpi::vUInt l5 = sfpi::l_reg[sfpi::LRegs::LReg5];
-    sfpi::vUInt l6 = sfpi::l_reg[sfpi::LRegs::LReg6];
+    // ... l1, l2, l4, l5, l6
 
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in      = sfpi::dst_reg[0];
         sfpi::vFloat half    = sfpi::vConstFloatPrgm0;  // 0.5
         sfpi::vFloat half_in = in * half;
-
-        // 6-piece piecewise linear LUT with sign handling
         sfpi::vFloat result  = lut2_sign(in, l0, l1, l2, l4, l5, l6);
         result               = half_in + result;
-
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
 }
 ```
 
----
+### LUT Coefficients (lines 182-213)
 
-## Known Precision Characteristics
+The 6-piece piecewise linear LUT is initialized with these coefficients:
 
-### Floor Value Bug (Tiny Inputs)
+| Segment (|x|) | Slope (A) | Intercept (B) | Hex (A) | Hex (B) |
+|---------------|-----------|---------------|---------|---------|
+| [0.0, 0.5) | 0.1928 | -0.0150 | 0x322B | 0x86D8 |
+| [0.5, 1.0) | 0.4939 | -0.1605 | 0x37E7 | 0xB122 |
+| [1.0, 1.5) | 0.6189 | -0.2797 | 0x38F3 | 0xB479 |
+| [1.5, 2.0) | 0.6099 | -0.2635 | 0x38E1 | 0xB437 |
+| [2.0, 3.0) | 0.5402 | -0.1194 | 0x3852 | 0xAFA4 |
+| [3.0, inf) | 0.5000 | 0.0 | 0x3800 | 0x7C00* |
 
-**Discovery:** For tiny normal inputs (~1e-38 to ~1e-10), GELU outputs a constant floor value of `2.980232e-05` (bf16 bits: `0x37F9`).
+*Note: 0x7C00 is +inf in IEEE 754 half-precision; hardware may interpret this specially.
 
-| Input Region | Expected Behavior | Actual Behavior | Max ULP Error |
-|--------------|-------------------|-----------------|---------------|
-| Tiny normal (1e-38 to 1e-10) | GELU(x) ≈ 0.5*x | Constant 2.98e-05 | 14,266 |
-| GELU active region (-2 to 2) | Standard GELU curve | Excellent precision | 0-4 |
-| Large positive (>3) | GELU(x) ≈ x | Correct | 0-2 |
-| Large negative (<-3) | GELU(x) ≈ 0 | Correct | 0-2 |
+### Formula
 
-**Root Cause:** The Chebyshev polynomial's constant term `2.98325768482e-05` dominates for near-zero inputs because the higher-order terms become negligible. This creates a floor effect where the output cannot go below this minimum value.
-
-**Impact:** For BERT and other transformer models, this is generally acceptable because:
-1. Values in the tiny normal range rarely occur in practice
-2. The GELU active region (-2 to 2) has excellent precision (0-4 ULP)
-3. Post-LayerNorm activations typically have mean~0, stddev~1
-
-See `gelu_precision_analysis.md` for detailed analysis and visualization.
-
----
-
-## Usage in tt-train
-
-### Forward Pass (from tests)
-
-```cpp
-// Reference implementation for comparison
-float reference_gelu(float x) {
-    return 0.5f * x * (1.0f + std::erf(x / std::sqrt(2.0f)));
-}
-
-// Hardware operation via TTNN
-auto output = ttml::ops::gelu(input);
 ```
+GELU_fast(x) = 0.5 * x + lut2_sign(x)
 
-### Backward Pass (from tests)
-
-```cpp
-// Reference implementation
-float reference_gelu_backward(float x) {
-    float cdf = 0.5f * (1.0f + std::erf(x / std::sqrt(2.0f)));
-    float pdf = std::exp(-0.5f * x * x) / std::sqrt(2.0f * M_PI);
-    return cdf + x * pdf;
-}
-
-// Hardware operation via TTNN
-auto grad_input = ttml::ops::gelu_bw(grad_output, input);
+where lut2_sign(x) = sign(x) * (A[segment] * |x| + B[segment])
 ```
 
 ---
 
-## Related Files
+## 5. Backward Pass: Exact Mode (erf-based)
+
+**This is what tt-train uses for backward GELU.**
+
+### Source File
+
+`ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/kernels/compute/eltwise_bw_gelu_approx_none.cpp`
+
+### Mathematical Formula
+
+```
+GELU'(x) = CDF(x) + x * PDF(x)
+
+where:
+  CDF(x) = 0.5 * (1 + erf(x / sqrt(2)))
+  PDF(x) = exp(-0.5 * x^2) / sqrt(2 * pi)
+
+grad_input = grad_output * GELU'(x)
+```
+
+### Constants (lines 30-31)
+
+```cpp
+constexpr float kAlpha = 0.70710678118654752440f;  // 1 / sqrt(2)
+constexpr float kBeta = 0.3989422804014327f;       // 1 / sqrt(2 * pi)
+```
+
+### Algorithm (lines 50-91)
+
+```cpp
+// Step 1: CDF term = 0.5 * (1 + erf(x / sqrt(2)))
+tile[1] = x * kAlpha;              // x / sqrt(2)
+tile[1] = erf(tile[1]);            // erf(x / sqrt(2))
+tile[1] = (tile[1] + 1.0) * 0.5;   // 0.5 * (1 + erf(...))
+
+// Step 2: PDF term = x * (1 / sqrt(2*pi)) * exp(-x^2 / 2)
+tile[2] = x^2;                     // square
+tile[2] = tile[2] * -0.5;          // -0.5 * x^2
+tile[2] = exp(tile[2]);            // exp(-0.5 * x^2)
+tile[2] = tile[2] * kBeta;         // * (1 / sqrt(2*pi))
+tile[2] = tile[2] * x;             // * x
+
+// Step 3: Result = grad * (CDF + PDF)
+result = grad * (tile[1] + tile[2]);
+```
+
+---
+
+## 6. Backward Pass: Approximate Mode (tanh-based)
+
+**NOT used by tt-train (but available via `approx_mode="tanh"`).**
+
+### Source File
+
+`ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/kernels/compute/eltwise_bw_gelu_approx_tanh.cpp`
+
+### Mathematical Formula
+
+Uses the tanh approximation of GELU:
+```
+GELU_approx(x) = 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+```
+
+The derivative is:
+```
+GELU'_approx(x) = CDF_term + x * PDF_term
+
+where:
+  beta = sqrt(2/pi) = 0.7978845608...
+  kappa = 0.044715
+  inner = beta * (x + kappa * x^3)
+
+  CDF_term = 0.5 * (1 + tanh(inner))
+  PDF_term = 0.5 * beta * (1 + 3*kappa*x^2) * (1 - tanh^2(inner))
+```
+
+### Constants (lines 19-32)
+
+```cpp
+#define M_SQRT2 1.41421356237309504880f    // sqrt(2)
+#define M_2_SQRTPI 1.12837916709551257390f // 2/sqrt(pi)
+
+constexpr float kBeta = M_SQRT2 * M_2_SQRTPI * 0.5;  // sqrt(2/pi)
+constexpr float kKappa = 0.044715;
+```
+
+---
+
+## 7. Reproducible Reference Implementations
+
+### Forward GELU (Accurate Mode) - Python/NumPy
+
+```python
+import numpy as np
+
+# Chebyshev coefficients from ckernel_sfpu_gelu.h:36-52
+CHEBYSHEV_COEFFS = [
+    -1.81205228163e-09,   # c15
+    -4.59055119276e-08,   # c14
+    -3.74540617693e-07,   # c13
+    -2.29754133825e-07,   # c12
+    1.19076782913e-05,    # c11
+    4.25116466215e-05,    # c10
+    -0.000138391838381,   # c9
+    -0.000862052441087,   # c8
+    0.000768340223025,    # c7
+    0.0092074331601,      # c6
+    -0.00208478037614,    # c5
+    -0.0656369476513,     # c4
+    0.00244542739174,     # c3
+    0.398579460781,       # c2
+    0.499174645395,       # c1
+    2.98325768482e-05,    # c0
+]
+
+def gelu_chebyshev(x: np.ndarray) -> np.ndarray:
+    """
+    Reproduces the Tenstorrent hardware GELU (accurate mode).
+
+    Algorithm from: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h
+    """
+    result = np.zeros_like(x)
+
+    # x == 0: result = 0 (already initialized)
+
+    # x >= 3.0: result = x (identity)
+    mask_large = x >= 3.0
+    result[mask_large] = x[mask_large]
+
+    # -5.5 <= x < 3.0: use Chebyshev polynomial
+    mask_poly = (x >= -5.5) & (x < 3.0) & (x != 0.0)
+    x_poly = x[mask_poly]
+
+    # Horner's method for polynomial evaluation
+    poly_result = np.zeros_like(x_poly)
+    for coeff in CHEBYSHEV_COEFFS:
+        poly_result = poly_result * x_poly + coeff
+
+    # Apply sign correction: result = sign(x) * |poly_result|
+    result[mask_poly] = np.sign(x_poly) * np.abs(poly_result)
+
+    # x < -5.5: result = 0 (already initialized)
+
+    return result
+
+def gelu_exact(x: np.ndarray) -> np.ndarray:
+    """Standard GELU formula for comparison."""
+    return 0.5 * x * (1 + np.erf(x / np.sqrt(2)))
+```
+
+### Forward GELU (Fast Mode) - Python/NumPy
+
+```python
+import numpy as np
+
+# LUT coefficients from ckernel_sfpu_gelu.h:205-212
+LUT_SEGMENTS = [
+    # (max_x, slope_A, intercept_B)
+    (0.5, 0.1928, -0.0150),
+    (1.0, 0.4939, -0.1605),
+    (1.5, 0.6189, -0.2797),
+    (2.0, 0.6099, -0.2635),
+    (3.0, 0.5402, -0.1194),
+    (np.inf, 0.5000, 0.0),
+]
+
+def gelu_lut(x: np.ndarray) -> np.ndarray:
+    """
+    Reproduces the Tenstorrent hardware GELU (fast/LUT mode).
+
+    Algorithm from: tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_gelu.h
+    Formula: GELU(x) = 0.5*x + sign(x) * (A*|x| + B)
+    """
+    abs_x = np.abs(x)
+    sign_x = np.sign(x)
+
+    # Initialize with last segment values
+    A = np.full_like(x, 0.5)
+    B = np.full_like(x, 0.0)
+
+    # Apply segments in reverse order (so smaller thresholds override)
+    for max_val, slope, intercept in reversed(LUT_SEGMENTS):
+        mask = abs_x < max_val
+        A[mask] = slope
+        B[mask] = intercept
+
+    # lut2_sign(x) = sign(x) * (A * |x| + B)
+    lut_result = sign_x * (A * abs_x + B)
+
+    # result = 0.5 * x + lut_result
+    return 0.5 * x + lut_result
+```
+
+### Backward GELU (Exact Mode) - Python/NumPy
+
+```python
+import numpy as np
+
+def gelu_backward_exact(grad_output: np.ndarray, x: np.ndarray) -> np.ndarray:
+    """
+    Reproduces the Tenstorrent hardware GELU backward (exact/erf mode).
+
+    Algorithm from: ttnn/.../eltwise_bw_gelu_approx_none.cpp
+    """
+    kAlpha = 0.70710678118654752440  # 1 / sqrt(2)
+    kBeta = 0.3989422804014327       # 1 / sqrt(2 * pi)
+
+    # CDF term: 0.5 * (1 + erf(x / sqrt(2)))
+    cdf_term = 0.5 * (1 + np.erf(x * kAlpha))
+
+    # PDF term: x * (1 / sqrt(2*pi)) * exp(-x^2 / 2)
+    pdf_term = x * kBeta * np.exp(-0.5 * x * x)
+
+    # grad_input = grad_output * (CDF + PDF)
+    return grad_output * (cdf_term + pdf_term)
+```
+
+---
+
+## 8. Known Precision Characteristics
+
+### Floor Value Bug (Accurate Mode)
+
+For tiny positive inputs (~1e-38 to ~1e-10), the Chebyshev polynomial produces a constant floor value instead of the expected near-linear response.
+
+| Input Region | Expected | Actual | Root Cause |
+|--------------|----------|--------|------------|
+| 1e-38 to 1e-10 | GELU(x) ≈ 0.5*x | Constant 2.98e-05 | Polynomial c0 term dominates |
+| -2 to 2 (active region) | Standard GELU | Excellent (0-4 ULP) | Polynomial well-fitted |
+| > 3 | GELU(x) = x | Exact | Uses identity |
+| < -3 | GELU(x) = 0 | Correct | Sign correction |
+
+**Root Cause:** The constant term c0 = 2.98325768482e-05 dominates when x is tiny because all higher-order terms (c1*x, c2*x^2, ...) become negligible.
+
+**BFloat16 representation:** 0x37F9 = 2.980232e-05
+
+See `gelu_precision_analysis.md` for detailed ULP analysis.
+
+---
+
+## 9. File Reference Table
+
+### Forward Pass Implementation Files
+
+| File | Lines | Description |
+|------|-------|-------------|
+| `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h` | 33-89 | Metal GELU: Chebyshev + dispatcher |
+| `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_gelu.h` | 38-111, 182-213 | TT-LLK GELU: LUT approx + init |
+| `tt_metal/include/compute_kernel_api/eltwise_unary/gelu.h` | 18-41 | Compute API: gelu_tile() |
+| `ttnn/cpp/ttnn/operations/eltwise/unary/unary.cpp` | 127-145 | TTNN operation wrapper |
+| `ttnn/cpp/ttnn/operations/eltwise/unary/unary.hpp` | 26-33 | Default parameter (false) |
+
+### Backward Pass Implementation Files
+
+| File | Lines | Description |
+|------|-------|-------------|
+| `ttnn/.../gelu_backward/.../eltwise_bw_gelu_approx_none.cpp` | 30-91 | Exact erf-based backward |
+| `ttnn/.../gelu_backward/.../eltwise_bw_gelu_approx_tanh.cpp` | 19-106 | Approximate tanh-based backward |
+
+### tt-train Usage
+
+| File | Lines | Description |
+|------|-------|-------------|
+| `tt-train/sources/ttml/ops/unary_ops.cpp` | 37-49 | GELU forward + backward call |
+
+### Related Files
 
 | File | Description |
 |------|-------------|
-| `tt-train/tests/ops/gelu_op_test.cpp` | GELU test suite with ULP validation |
-| `tt-train/tests/ops/gelu_precision_analysis.md` | Detailed precision analysis |
-| `tt-train/tests/core/bf16_ulp.hpp` | BFloat16 ULP distance calculator |
-| `gelu_ulp_plot_wh_n150_bf16_ulp_module.png` | ULP error visualization |
+| `tt-train/tests/ops/gelu_op_test.cpp` | GELU test suite |
+| `tt-train/tests/ops/gelu_precision_analysis.md` | ULP precision analysis |
+| `tt-train/tests/core/bf16_ulp.hpp` | BFloat16 ULP calculator |
 
 ---
 
-## Version Information
+## Appendix: Mathematical Definitions
 
-- **Hardware:** Wormhole n150 L
-- **Branch:** `ivoitovych/bert-model-for-ttml-pr-gelu-test-suite-amendment-ulp-diagnostic-04`
-- **Date:** 2025-12-27
-- **tt-metal commit:** See current HEAD
+### Exact GELU (erf-based)
+
+```
+GELU(x) = 0.5 * x * (1 + erf(x / sqrt(2)))
+
+where erf(x) = (2/sqrt(pi)) * integral(0, x, exp(-t^2) dt)
+```
+
+### GELU Derivative
+
+```
+GELU'(x) = CDF(x) + x * PDF(x)
+
+where:
+  CDF(x) = 0.5 * (1 + erf(x / sqrt(2)))     [Cumulative distribution function]
+  PDF(x) = exp(-0.5 * x^2) / sqrt(2 * pi)   [Probability density function]
+```
+
+### Tanh Approximation (not used by tt-train)
+
+```
+GELU_approx(x) = 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+```
