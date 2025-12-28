@@ -2,7 +2,7 @@
 
 This document provides a complete, fact-based reference to the GELU activation function implementation in tt-metal. All information is traceable to source code with exact file paths and line numbers.
 
-**Document Version:** 2025-12-27
+**Document Version:** 2025-12-28
 **Hardware:** Wormhole n150 L (Blackhole implementations are identical)
 **Branch:** `ivoitovych/bert-model-for-ttml-pr-gelu-test-suite-amendment-ulp-diagnostic-04`
 
@@ -21,6 +21,7 @@ This document provides a complete, fact-based reference to the GELU activation f
 7. [Reproducible Reference Implementations](#7-reproducible-reference-implementations)
 8. [Known Precision Characteristics](#8-known-precision-characteristics)
 9. [File Reference Table](#9-file-reference-table)
+10. [SFPU Operations Reference (Implementation Constraints)](#10-sfpu-operations-reference-implementation-constraints)
 
 ---
 
@@ -688,6 +689,277 @@ See `gelu_precision_analysis.md` for detailed ULP analysis.
 | `tt-train/tests/ops/gelu_op_test.cpp` | GELU test suite |
 | `tt-train/tests/ops/gelu_precision_analysis.md` | ULP precision analysis |
 | `tt-train/tests/core/bf16_ulp.hpp` | BFloat16 ULP calculator |
+
+---
+
+## 10. SFPU Operations Reference (Implementation Constraints)
+
+This section documents the primitive operations available at the GELU implementation point (SFPU/SFPI layer). These operations define the building blocks for implementing alternative GELU algorithms.
+
+### Source Files
+
+| File | Description |
+|------|-------------|
+| `runtime/sfpi/include/sfpi.h` | Core SFPI C++ wrapper classes (vFloat, vInt, vUInt) |
+| `runtime/sfpi/include/wormhole/sfpi_hw.h` | Hardware builtin definitions |
+| `runtime/sfpi/include/wormhole/sfpi_lib.h` | Library functions (lut, exexp, setexp, etc.) |
+| `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/*.h` | Higher-level SFPU operations |
+
+### Vector Register Types
+
+The SFPU operates on 32-element vectors (one per SFPU lane per tile row):
+
+| Type | Description |
+|------|-------------|
+| `vFloat` | 32-bit floating-point vector register |
+| `vInt` | 32-bit signed integer vector register |
+| `vUInt` | 32-bit unsigned integer vector register |
+| `dst_reg[]` | DST register array (8-16 tiles depending on FP16/FP32 mode) |
+| `l_reg[]` | L-register array (8 registers for LUT coefficients, constants) |
+
+### Primitive Arithmetic Operations
+
+**vFloat Arithmetic** (`sfpi.h:344-397`):
+```cpp
+// Binary operators (return new vFloat)
+vFloat operator+(const vFloat b) const;  // Addition
+vFloat operator-(const vFloat b) const;  // Subtraction
+vFloat operator*(const vFloat b) const;  // Multiplication
+// NOTE: No native division - use sfpu_reciprocal() + multiply
+
+// Compound assignment
+vFloat operator+=(const vFloat);
+vFloat operator-=(const vFloat);
+vFloat operator*=(const vFloat);
+
+// Unary operators
+vFloat operator-() const;    // Negation
+vFloat operator++();         // Increment
+vFloat operator--();         // Decrement
+```
+
+**vInt Arithmetic** (`sfpi.h:460-548`):
+```cpp
+// Arithmetic
+vInt operator+(const vInt) const;
+vInt operator-(const vInt) const;
+vInt operator+=(const vInt);
+vInt operator-=(const vInt);
+
+// Bitwise
+vInt operator&(const vInt) const;   // AND
+vInt operator|(const vInt) const;   // OR
+vInt operator^(const vInt) const;   // XOR
+vInt operator~() const;             // NOT
+vInt operator<<(int) const;         // Left shift
+```
+
+### Comparison Operations
+
+**vFloat Comparisons** (`sfpi.h:390-396`):
+```cpp
+// Returns __vCond for use with v_if/v_elseif
+__vCond operator==(const float x) const;
+__vCond operator!=(const float x) const;
+__vCond operator<(const float x) const;
+__vCond operator<=(const float x) const;
+__vCond operator>(const float x) const;
+__vCond operator>=(const float x) const;
+
+// Also supports vFloat comparisons
+__vCond operator<(const vFloat x) const;
+// etc.
+```
+
+**vInt Comparisons** (`sfpi.h:520-548`):
+```cpp
+__vCond operator==(const vInt) const;
+__vCond operator!=(const vInt) const;
+__vCond operator<(const vInt) const;
+__vCond operator<=(const vInt) const;
+__vCond operator>(const vInt) const;
+__vCond operator>=(const vInt) const;
+```
+
+### Predicated Execution (Vectorized Conditionals)
+
+```cpp
+// Usage pattern:
+v_if (condition) {
+    // Executed for lanes where condition is true
+}
+v_elseif (condition2) {
+    // Executed for lanes where condition is false AND condition2 is true
+}
+v_else {
+    // Executed for lanes where both conditions are false
+}
+v_endif;
+```
+
+**Hardware behavior:** Predication masks vector lanes; all lanes still execute the same instruction but results are only written for active lanes.
+
+### Exponent/Mantissa Manipulation (`sfpi_lib.h`)
+
+```cpp
+// Extract exponent (debiased: returns actual exponent, not biased value)
+vInt exexp(const vFloat v);
+
+// Extract exponent (raw biased value)
+vInt exexp_nodebias(const vFloat v);
+
+// Extract mantissa (normalized with 8/9 leading bits)
+vInt exman8(const vFloat v);
+vInt exman9(const vFloat v);
+
+// Set exponent (from immediate or vector)
+vFloat setexp(const vFloat v, const uint32_t exp);
+vFloat setexp(const vFloat v, const __vIntBase exp);
+
+// Set mantissa
+vFloat setman(const vFloat v, const uint32_t man);
+vFloat setman(const vFloat v, const __vIntBase man);
+
+// Add to exponent (multiply by 2^exp)
+vFloat addexp(const vFloat in, const int32_t exp);
+
+// Set sign
+vType setsgn(const vType v, const int32_t sgn);
+vType setsgn(const vType v, const vType sgn);
+```
+
+### LUT-Based Function Approximation
+
+```cpp
+// 3-entry LUT (sign retained)
+vFloat lut(const vFloat v, const vUInt l0, const vUInt l1, const vUInt l2);
+
+// 3-entry LUT (sign updated from LUT)
+vFloat lut_sign(const vFloat v, const vUInt l0, const vUInt l1, const vUInt l2);
+
+// 6-entry LUT variants (FP16 or FP32 coefficients)
+vFloat lut2(const vFloat v, const vUInt l0, const vUInt l1, const vUInt l2,
+            const vUInt b01, const vUInt b23, const vUInt b45, const int mode = 1);
+vFloat lut2_sign(/* same params */);
+
+// FP32 LUT with 3 entries
+vFloat lut2(const vFloat v,
+            const vFloat a0, const vFloat a1, const vFloat a2,
+            const vFloat b0, const vFloat b1, const vFloat b2);
+```
+
+**LUT operation:** Selects coefficients based on |x| magnitude, computes `A*|x| + B` or similar.
+
+### Other Utility Functions
+
+```cpp
+// Absolute value
+vFloat abs(const vFloat v);
+vInt abs(const vInt v);
+
+// Leading zeros count
+vInt lz(const vType v);
+vInt lz_nosgn(const vType v);  // Ignores sign bit
+
+// Shift operation
+vUInt shft(const vUInt v, const vInt amt);
+vUInt shft(const vUInt v, int amt);
+
+// Type reinterpret (bit-preserving cast)
+vType reinterpret<vType>(const __vBase v);
+
+// Min/max (in-place swap: after call, dst = min, src = max)
+void vec_min_max(__vBase& dst, __vBase& src);
+void vec_swap(__vBase& dst, __vBase& src);
+```
+
+### Type Conversion Functions
+
+```cpp
+// Integer to float
+vFloat int32_to_float(vInt in, int round_mode = 1);
+
+// Float to half-precision
+vUInt float_to_fp16a(vFloat in, int round_mode = 1);
+vUInt float_to_fp16b(vFloat in, int round_mode = 1);
+
+// Float to integer
+vUInt float_to_uint8(vFloat in, int round_mode = 1);
+vUInt float_to_int8(vFloat in, int round_mode = 1);
+vUInt float_to_uint16(vFloat in, int round_mode = 1);
+vUInt float_to_int16(vFloat in, int round_mode = 1);
+
+// int16 conversion (used for floor/round operations)
+int16 float_to_int16(vFloat in, int round_mode);
+```
+
+### Constants
+
+```cpp
+// Built-in constants
+vFloat vConst0;      // 0.0f
+vFloat vConst1;      // 1.0f
+vFloat vConstNeg1;   // -1.0f
+
+// Programmable constants (user-settable, persist across calls)
+vFloat vConstFloatPrgm0;
+vFloat vConstFloatPrgm1;
+vFloat vConstFloatPrgm2;
+```
+
+### Higher-Level Composite Functions
+
+These functions are built from primitives and available in `ckernel_sfpu_*.h`:
+
+| Function | Location | Algorithm | Notes |
+|----------|----------|-----------|-------|
+| `_sfpu_exp_21f_()` | `ckernel_sfpu_exp.h` | Moroz et al. polynomial | ~5 ULP for FP32 |
+| `_sfpu_exp_61f_()` | `ckernel_sfpu_exp.h` | 6th-degree polynomial | More accurate |
+| `_sfpu_exp_f32_accurate_()` | `ckernel_sfpu_exp.h` | Cody-Waite + Taylor | <1 ULP for FP32 |
+| `_sfpu_reciprocal_<N>()` | `ckernel_sfpu_recip.h` | Newton-Raphson (N iterations) | N=1 for BF16, N=2 for FP32 |
+| `_sfpu_tanh_polynomial_()` | `ckernel_sfpu_tanh.h` | 6th-degree polynomial | For BF16 mode |
+| `_sfpu_tanh_continued_fraction_()` | `ckernel_sfpu_tanh.h` | Lambert's continued fraction | For FP32 mode |
+| `calculate_erf_body()` | `ckernel_sfpu_erf_erfc.h` | Piecewise polynomial | 5th-degree per segment |
+| `sfpu_sinpi()` / `sfpu_tan()` | `ckernel_sfpu_trigonometry.h` | Polynomial approximations | Various degrees |
+
+### Performance Considerations
+
+**Relative Operation Costs (estimated, lower is faster):**
+
+| Category | Operations | Relative Cost |
+|----------|-----------|---------------|
+| Single-cycle | `+`, `-`, `*`, abs, setsgn, exexp, setexp | 1x |
+| LUT | lut(), lut2(), lut2_sign() | 1-2x |
+| Predication | v_if/v_elseif/v_endif | 1x per block |
+| Newton-Raphson 1-iter | reciprocal (BF16 precision) | 5-10x |
+| Newton-Raphson 2-iter | reciprocal (FP32 precision) | 10-15x |
+| exp() | exponential function | 15-25x |
+| tanh() (polynomial) | hyperbolic tangent | 10-20x |
+| erf() | error function | 20-30x |
+
+**Key observations:**
+1. **No native division** - must use reciprocal (Newton-Raphson) + multiply
+2. **LUT operations are fast** - 6-piece piecewise linear is efficient
+3. **Polynomial evaluation** uses Horner's method - O(n) multiply-adds for degree n
+4. **Predication** is efficient but adds conditional overhead per block
+5. **exp/tanh/erf are expensive** - composed from many primitives
+
+### Implications for Alternative GELU Implementations
+
+The current Chebyshev implementation uses:
+- 15 multiply-add operations (Horner's method)
+- 2 comparisons + 1 predicated block
+- 1 setsgn operation
+
+Potential alternatives:
+1. **Lower-degree polynomial**: Fewer operations, lower precision
+2. **Piecewise linear (LUT)**: Already implemented as fast mode
+3. **Rational approximation (Padé)**: Requires reciprocal (expensive)
+4. **Lookup table with interpolation**: Limited by LUT granularity
+
+For GELU backward, the bottleneck is exp() and erf():
+- Consider tanh-based approximation (uses cheaper tanh instead of erf+exp)
+- Or pre-computed lookup tables for common input ranges
 
 ---
 
