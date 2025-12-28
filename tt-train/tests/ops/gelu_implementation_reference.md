@@ -111,6 +111,7 @@ inline void calculate_gelu() {
     if constexpr (APPROXIMATION_MODE) {
         _calculate_gelu_<APPROXIMATION_MODE, ITERATIONS>();
     } else {
+#pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat in = sfpi::dst_reg[0];
             sfpi::vFloat result = in;
@@ -221,14 +222,16 @@ The 6-piece piecewise linear LUT is initialized with these coefficients:
 
 | Segment (|x|) | Slope (A) | Intercept (B) | Hex (A) | Hex (B) |
 |---------------|-----------|---------------|---------|---------|
-| [0.0, 0.5) | 0.1928 | -0.0150 | 0x322B | 0x86D8 |
+| [0.0, 0.5) | 0.1928 | -0.000104* | 0x322B | 0x86D8 |
 | [0.5, 1.0) | 0.4939 | -0.1605 | 0x37E7 | 0xB122 |
 | [1.0, 1.5) | 0.6189 | -0.2797 | 0x38F3 | 0xB479 |
 | [1.5, 2.0) | 0.6099 | -0.2635 | 0x38E1 | 0xB437 |
 | [2.0, 3.0) | 0.5402 | -0.1194 | 0x3852 | 0xAFA4 |
-| [3.0, inf) | 0.5000 | 0.0 | 0x3800 | 0x7C00* |
+| [3.0, inf) | 0.5000 | 0.0 | 0x3800 | 0x7C00** |
 
-*Note: 0x7C00 is +inf in IEEE 754 half-precision; hardware may interpret this specially.
+*Note: Source code comment claims B=-0.0150 (hex 0xA3AE) for segment [0.0, 0.5), but the actual loaded value is 0x86D8 ≈ -0.000104. This table reports what the code actually loads.
+
+**Note: 0x7C00 is +inf in IEEE 754 half-precision; hardware may interpret this specially.
 
 ### Formula
 
@@ -396,9 +399,10 @@ def gelu_exact(x: np.ndarray) -> np.ndarray:
 import numpy as np
 
 # LUT coefficients from ckernel_sfpu_gelu.h:205-212
+# Note: First segment intercept is 0x86D8 ≈ -0.000104 (not -0.0150 as comment claims)
 LUT_SEGMENTS = [
     # (max_x, slope_A, intercept_B)
-    (0.5, 0.1928, -0.0150),
+    (0.5, 0.1928, -0.000104),  # B = 0x86D8 (actual loaded value)
     (1.0, 0.4939, -0.1605),
     (1.5, 0.6189, -0.2797),
     (2.0, 0.6099, -0.2635),
@@ -525,8 +529,9 @@ float gelu_exact(float x) {
 
 // LUT coefficients from ckernel_sfpu_gelu.h:205-212
 // Format: {max_abs_x, slope_A, intercept_B}
+// Note: First segment intercept is 0x86D8 ≈ -0.000104 (not -0.0150 as source comment claims)
 constexpr float LUT_SEGMENTS[6][3] = {
-    {0.5f, 0.1928f, -0.0150f},
+    {0.5f, 0.1928f, -0.000104f},  // B = 0x86D8 (actual loaded value)
     {1.0f, 0.4939f, -0.1605f},
     {1.5f, 0.6189f, -0.2797f},
     {2.0f, 0.6099f, -0.2635f},
@@ -668,7 +673,7 @@ See `gelu_precision_analysis.md` for detailed ULP analysis.
 | File | Lines | Description |
 |------|-------|-------------|
 | `ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/kernels/compute/eltwise_bw_gelu_approx_none.cpp` | 30-91 | Exact erf-based backward |
-| `ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/kernels/compute/eltwise_bw_gelu_approx_tanh.cpp` | 19-106 | Approximate tanh-based backward |
+| `ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/kernels/compute/eltwise_bw_gelu_approx_tanh.cpp` | 19-117 | Approximate tanh-based backward |
 
 ### tt-train Usage
 
