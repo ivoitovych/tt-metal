@@ -1,11 +1,11 @@
 # Bug Report: ttnn::untilize Data Corruption on Blackhole P150
 
-**Status**: LIKELY HARDWARE BUG - Workaround available, fix attempts exhausted
+**Status**: ONGOING INVESTIGATION - Interface 0-specific bug at z=1, y≥5
 **Severity**: Critical
 **Component**: tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_pack_untilize.h
 **Hardware**: Blackhole P150
 **Branch**: `ivoitovych/tt-train-untilize-blackhole-bug-2`
-**Date**: 2025-12-27 (Updated - Session 10)
+**Date**: 2025-12-28 (Updated - Session 13)
 
 ---
 
@@ -685,6 +685,7 @@ These values (e.g., 3201515335) are the result of argmax operating on corrupted 
 | 2025-12-17 | Investigation Team | **Session 6**: Started fixing fast path instead of using workaround. |
 | 2025-12-18 | Investigation Team | **Session 7-8**: Partial fix achieved - dual L1 addresses + set_packer_strides makes face pair 0 work. Face pair 1 rows 21-31 still corrupted. DST_ACCESS_STRIDED_MODE confirmed required for multi-tile cases. |
 | 2025-12-27 | Investigation Team | **Session 9-10**: Exhaustive testing of all remaining software fixes. All failed. Strong evidence points to Blackhole packer hardware bug for counter combination z=1, y>=5. Status changed to LIKELY HARDWARE BUG. |
+| 2025-12-28 | Investigation Team | **Session 13**: Key discovery - corruption is INTERFACE 0 SPECIFIC at z=1! Only 176 errors = 11 rows × 16 cols = interface 0 only. Interface 1 works correctly at z=1. Tested ch1 counter sync (failed - made worse) and 8-row model (no effect). Status changed to ONGOING INVESTIGATION. |
 
 ---
 
@@ -731,3 +732,77 @@ The remaining corruption in face pair 1 rows 5-15 (global rows 21-31) appears to
 1. **Use workaround**: `use_pack_untilize=False` for Blackhole with 4-face tiles
 2. **File hardware bug report** with Tenstorrent describing the specific counter combination
 3. **Investigate if newer Blackhole firmware/silicon has a fix**
+
+---
+
+## Session 13 Updates: Interface 0-Specific Bug Identified (2025-12-28)
+
+### Key Discovery
+
+**Critical Finding**: The 176 errors for 32x32 test = 11 rows × 16 columns!
+
+This arithmetic reveals:
+- **Interface 0** (face 2, columns 0-15) has corruption at z=1, y≥5
+- **Interface 1** (face 3, columns 16-31) works **correctly** at z=1!
+
+The issue is NOT a general hardware bug - it's specific to interface 0's DEST addressing when z=1.
+
+### Fix Attempts (Session 13)
+
+**Attempt 16: Channel 1 Counter Synchronization**
+- Added ch1_y increment: `TT_OP_INCADCXY(p_setadc::PAC, 1, 0, 1, 0)` (Ch1_Y=1)
+- Reset both ch0_y and ch1_y between face pairs: bitmask 0b1010
+- Reset all XY and ZW counters at start: bitmask 0b1111
+- **Result: MUCH WORSE** - Row 0 had Y-stride values (0, 16, 32, 48) instead of X values
+- **Reverted** - Only ch0 counters should be modified
+
+**Attempt 17: 8-Row Model (Like Wormhole)**
+- Changed MOP_OUTER_LOOP from 16 to 8 rows
+- Run MOP twice per 16-row face pair (first 8 rows, then next 8)
+- **Result: NO CHANGE** - Same 176/360 error pattern
+
+### Technical Analysis
+
+**Why ch1 counter sync failed:**
+- ch0 and ch1 are address counter contexts, NOT packer interfaces
+- Both interfaces likely use ch0 for DEST addressing
+- Modifying ch1 caused incorrect addressing
+
+**Why 8-row model didn't help:**
+- The corruption starts at y=5 within face pair 1, not at an 8-row boundary
+- The issue is position-specific (z=1, y≥5), not structure-specific
+
+### Current Understanding
+
+| Aspect | Interface 0 | Interface 1 |
+|--------|------------|-------------|
+| Face at z=0 | Face 0 (cols 0-15) | Face 1 (cols 16-31) |
+| Face at z=1 | Face 2 (cols 0-15) | Face 3 (cols 16-31) |
+| L1 Register (z=1) | SEC1_REG1 | SEC1_REG8 |
+| Status at z=1, y<5 | WORKS | WORKS |
+| Status at z=1, y≥5 | **CORRUPTED** | WORKS |
+
+### Areas Still to Investigate
+
+1. **Why does interface 0 fail but interface 1 work at z=1?**
+   - Different DEST offset calculation for face 2 vs face 3?
+   - Different register behavior based on interface ID?
+
+2. **What makes y=5 special?**
+   - Not an 8-row boundary (that would be y=8)
+   - Could be internal counter wrap or carry behavior
+   - May be related to how strides interact with counter values
+
+3. **SEC1_REG1 vs SEC1_REG8 behavior**
+   - Interface 0 uses SEC1_REG1 for z=1
+   - Interface 1 uses SEC1_REG8 for z=1
+   - Maybe SEC1_REG1 has different behavior or requires different configuration?
+
+### Next Steps
+
+1. Try using SEC0 registers for all face pairs (reconfigure L1 addresses between face pairs)
+2. Investigate if SEC1_REG1 requires different configuration than SEC1_REG8
+3. Compare regular llk_pack with untilize=true (which works correctly)
+4. Look for interface-specific DEST offset calculations
+
+### Status: Ongoing investigation - interface 0-specific issue at z=1, y≥5
