@@ -724,6 +724,134 @@ TT-LLK Base layer: tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfp
 
 **Key insight:** The Metal layer **overrides** the TT-LLK accurate mode with Chebyshev polynomial, but still uses TT-LLK's LUT for fast/approximate mode. The `_calculate_gelu_accurate_()` function in TT-LLK is effectively dead code.
 
+### Complete Call Stack
+
+This section traces the complete call path from `ttnn::gelu()` down to the kernel implementations.
+
+#### TTNN Layer → Device Operation
+
+```
+ttnn::gelu(tensor, fast_and_approximate=false)   // Python/C++ API entry point
+    │
+    │  File: ttnn/cpp/ttnn/operations/eltwise/unary/unary.cpp:127-140
+    ▼
+ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::GELU>::invoke(
+    tensor,
+    parameter=false,  // default: accurate mode
+    ...)
+    │
+    │  Creates: UnaryWithParam{UnaryOpType::GELU, 0.0f}  // 0.0f = accurate, 1.0f = fast
+    ▼
+detail::unary_impl() → prim::unary()
+    │
+    │  Generates compute kernel that calls:
+    ▼
+gelu_tile_init<fast_and_approx>()  // Once per tile batch
+gelu_tile<fast_and_approx>(idst)   // Once per tile
+```
+
+#### Compute Kernel API → SFPU Macros
+
+```
+gelu_tile_init<APPROX>()
+    │
+    │  File: tt_metal/include/compute_kernel_api/eltwise_unary/gelu.h:18-21
+    ▼
+MATH(SFPU_INIT_KERNEL_CALL(gelu, sfpu::gelu_init, APPROX))
+    │
+    │  File: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h:14-15
+    │  Expands to:
+    ▼
+llk_math_eltwise_unary_sfpu_init<SfpuType::gelu, APPROX>(sfpu::gelu_init<APPROX>)
+    │
+    │  File: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_init.h:17-21
+    ▼
+_llk_math_eltwise_unary_sfpu_init_<SfpuType::gelu>()  // Hardware SFPU setup
+sfpu::gelu_init<APPROX>()                              // Software initialization
+```
+
+```
+gelu_tile<APPROX>(idst)
+    │
+    │  File: tt_metal/include/compute_kernel_api/eltwise_unary/gelu.h:38-41
+    ▼
+MATH(SFPU_UNARY_NO_PARAM_KERNEL(gelu, RC, APPROX, idst))
+    │
+    │  File: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h:75-77
+    │  Expands to:
+    ▼
+_llk_math_eltwise_unary_sfpu_params_<APPROX>(
+    ckernel::sfpu::calculate_gelu<APPROX>,
+    idst,
+    (int)VectorMode::RC)
+    │
+    │  File: tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu_params.h:11-68
+    │  Sets up DST registers, calls the SFPU function for each tile face (4 faces x 8 rows = 32 elements)
+    ▼
+ckernel::sfpu::calculate_gelu<APPROX>()
+```
+
+#### SFPU Function Dispatch (Metal API Layer)
+
+```
+sfpu::gelu_init<APPROX>()
+    │
+    │  File: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h:63-66
+    ▼
+_init_gelu_<APPROX>()   // Defined in TT-LLK Base layer
+                        // Loads LUT coefficients to L-registers
+```
+
+```
+ckernel::sfpu::calculate_gelu<APPROX>()
+    │
+    │  File: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h:73-89
+    │
+    ├── if APPROX == true (fast mode):
+    │       │
+    │       ▼
+    │   _calculate_gelu_<true, ITERATIONS>()   // TT-LLK Base layer
+    │       │
+    │       │  File: tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_gelu.h:100-111
+    │       ▼
+    │   _calculate_gelu_appx_<ITERATIONS>()    // LUT-based piecewise linear
+    │       │
+    │       │  File: tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_gelu.h:38-84
+    │       ▼
+    │   result = 0.5*x + lut2_sign(x, l0..l6)  // Formula with bug for x<-3
+    │
+    └── if APPROX == false (accurate mode):
+            │
+            │  Metal layer handles this directly (does NOT call TT-LLK)
+            ▼
+        for each element in tile:
+            if (x == 0.0f): result = 0.0f
+            else if (x < 3.0f): result = calculate_gelu_chebyshev(x)
+            else: result = x  // identity for x >= 3.0
+                │
+                │  File: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h:33-61
+                ▼
+            calculate_gelu_chebyshev(x)
+                │
+                ▼
+            POLYVAL15(c15..c0, x)  // 15th-degree Chebyshev polynomial
+            result = setsgn(result, x)  // Preserve input sign
+```
+
+#### Dead Code Path (TT-LLK Accurate Mode)
+
+The following function exists in TT-LLK but is **never called** because Metal API overrides accurate mode:
+
+```
+_calculate_gelu_accurate_()
+    │
+    │  File: tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_gelu.h:118-180
+    │
+    │  DEAD CODE - Metal layer's calculate_gelu<false>() uses Chebyshev instead
+    ▼
+    [CDF-based polynomial implementation - never executed]
+```
+
 ### Forward Pass Implementation Files
 
 | File | Lines | Description |
