@@ -655,6 +655,33 @@ For tiny positive inputs (~1e-38 to ~1e-10), the Chebyshev polynomial produces a
 
 See `gelu_precision_analysis.md` for detailed ULP analysis.
 
+### Large Negative Value Bug (Fast/LUT Mode)
+
+**Critical:** The fast/LUT mode returns `x` instead of `~0` for large negative inputs (|x| >= 3).
+
+| Input x | GELU_LUT (actual) | GELU_exact (expected) | Error |
+|---------|-------------------|----------------------|-------|
+| -10.0 | **-10.0** | ~0 | 10.0 |
+| -5.0 | **-5.0** | ~0 | 5.0 |
+| -3.0 | **-3.0** | -0.004 | 2.996 |
+| +3.0 | +3.0 | +2.996 | 0.004 ✓ |
+| +10.0 | +10.0 | +10.0 | 0 ✓ |
+
+**Root Cause:** For the last LUT segment (|x| >= 3.0), the coefficients are A=0.5, B=0.0. The formula:
+
+```
+result = 0.5*x + sign(x) * (0.5*|x| + 0)
+```
+
+For negative x: `0.5*x - 0.5*|x| = 0.5*x - 0.5*(-x) = 0.5*x + 0.5*x = x` ✗
+For positive x: `0.5*x + 0.5*|x| = 0.5*x + 0.5*x = x` ✓
+
+The implementation is symmetric when it should be asymmetric (GELU → 0 for x → -∞, GELU → x for x → +∞).
+
+**Source Code Discrepancy:** In `_init_gelu_()`, the comment claims `lreg6_hi=0.0f;//7c00`, but 0x7C00 is +Infinity in FP16 (not 0.0). The hardware may interpret this specially, but the net effect produces the symmetric (buggy) behavior.
+
+**Impact:** This bug affects only the fast/LUT mode (`ttnn::gelu(tensor, true)`). The default accurate mode (Chebyshev) correctly returns ~0 for large negative inputs. **tt-train does NOT use fast mode**, so training is unaffected.
+
 ---
 
 ## 9. File Reference Table
