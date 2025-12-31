@@ -686,12 +686,50 @@ The implementation is symmetric when it should be asymmetric (GELU → 0 for x �
 
 ## 9. File Reference Table
 
+### Two-Layer File Architecture
+
+**Important:** There are two files named `ckernel_sfpu_gelu.h` with different content:
+
+| Layer | Path | Size | MD5 |
+|-------|------|------|-----|
+| **Metal API** | `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h` | 96 lines | `381945844ca0...` |
+| **TT-LLK Base** | `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_gelu.h` | 265 lines | `689b032d7813...` |
+
+**Relationship:**
+
+```
+tt_metal/include/compute_kernel_api/eltwise_unary/gelu.h
+    │
+    │  #include "ckernel_sfpu_gelu.h"
+    ▼
+Metal API layer: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h
+    │
+    ├── #include "ckernel.h"  ───────────────────────────────────────────────┐
+    ├── calculate_gelu_chebyshev()      ← Chebyshev polynomial (accurate)    │
+    ├── calculate_gelu<APPROX_MODE>()   ← Dispatcher                         │
+    │       ├── APPROX_MODE=true:  calls _calculate_gelu_<>()  ──────────────┼──┐
+    │       └── APPROX_MODE=false: uses calculate_gelu_chebyshev()           │  │
+    └── gelu_init() → calls _init_gelu_<>()  ────────────────────────────────┼──┤
+                                                                             │  │
+                                 ┌───────────────────────────────────────────┘  │
+                                 ▼                                              │
+TT-LLK Base layer: tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_gelu.h
+    │
+    ├── _init_gelu_()                    ← LUT coefficient initialization  ◄────┤
+    ├── _calculate_gelu_appx_()          ← LUT implementation (fast mode)  ◄────┘
+    ├── _calculate_gelu_accurate_()      ← CDF-based (DEAD CODE - Metal overrides)
+    ├── _calculate_gelu_()               ← Internal dispatcher
+    └── _calculate_gelu_derivative_()    ← Derivative implementations
+```
+
+**Key insight:** The Metal layer **overrides** the TT-LLK accurate mode with Chebyshev polynomial, but still uses TT-LLK's LUT for fast/approximate mode. The `_calculate_gelu_accurate_()` function in TT-LLK is effectively dead code.
+
 ### Forward Pass Implementation Files
 
 | File | Lines | Description |
 |------|-------|-------------|
-| `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h` | 33-89 | Metal GELU: Chebyshev + dispatcher |
-| `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_gelu.h` | 38-111, 182-213 | TT-LLK GELU: LUT approx + init |
+| `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h` | 33-89 | Metal API: Chebyshev polynomial + dispatcher |
+| `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_gelu.h` | 38-111, 182-213 | TT-LLK Base: LUT approximation + init functions |
 | `tt_metal/include/compute_kernel_api/eltwise_unary/gelu.h` | 18-41 | Compute API: gelu_tile() |
 | `ttnn/cpp/ttnn/operations/eltwise/unary/unary.cpp` | 127-145 | TTNN operation wrapper |
 | `ttnn/cpp/ttnn/operations/eltwise/unary/unary.hpp` | 26-33 | Default parameter (false) |
