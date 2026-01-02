@@ -239,8 +239,10 @@ The 6-piece piecewise linear LUT is initialized with these coefficients:
 ```
 GELU_fast(x) = 0.5 * x + lut2_sign(x)
 
-where lut2_sign(x) = sign(x) * (A[segment] * |x| + B[segment])
+where lut2_sign(x) = A[segment] * |x| + B[segment]  (always positive due to SGN_UPDATE)
 ```
+
+**Note on lut2_sign:** Unlike what the function name suggests, `lut2_sign()` does NOT multiply by `sign(x)`. It uses `SFPLUTFP32_MOD0_SGN_UPDATE` which means the sign comes from the computation result. Since A > 0 and |x| >= 0, and B is typically small, the result is always positive.
 
 ---
 
@@ -416,10 +418,14 @@ def gelu_lut(x: np.ndarray) -> np.ndarray:
     Reproduces the Tenstorrent hardware GELU (fast/LUT mode).
 
     Algorithm from: tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_gelu.h
-    Formula: GELU(x) = 0.5*x + sign(x) * (A*|x| + B)
+
+    IMPORTANT: lut2_sign() uses SFPLUTFP32_MOD0_SGN_UPDATE, meaning the sign
+    comes from the computation result, NOT from the input. The LUT computes
+    A*|x| + B which is always positive (for A>0, B>=0).
+
+    Formula: GELU(x) = 0.5*x + (A*|x| + B)
     """
     abs_x = np.abs(x)
-    sign_x = np.sign(x)
 
     # Initialize with last segment values
     A = np.full_like(x, 0.5)
@@ -431,8 +437,8 @@ def gelu_lut(x: np.ndarray) -> np.ndarray:
         A[mask] = slope
         B[mask] = intercept
 
-    # lut2_sign(x) = sign(x) * (A * |x| + B)
-    lut_result = sign_x * (A * abs_x + B)
+    # lut2_sign(x) = A * |x| + B  (always positive due to SGN_UPDATE)
+    lut_result = A * abs_x + B
 
     # result = 0.5 * x + lut_result
     return 0.5 * x + lut_result
@@ -544,11 +550,15 @@ constexpr float LUT_SEGMENTS[6][3] = {
  * Reproduces the Tenstorrent hardware GELU (fast/LUT mode).
  *
  * Algorithm from: tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_gelu.h
- * Formula: GELU(x) = 0.5*x + sign(x) * (A*|x| + B)
+ *
+ * IMPORTANT: lut2_sign() uses SFPLUTFP32_MOD0_SGN_UPDATE, meaning the sign
+ * comes from the computation result, NOT from the input. The LUT computes
+ * A*|x| + B which is always positive (for A>0, B>=0).
+ *
+ * Formula: GELU(x) = 0.5*x + (A*|x| + B)
  */
 float gelu_lut(float x) {
     float abs_x = std::abs(x);
-    float sign_x = (x >= 0.0f) ? 1.0f : -1.0f;
 
     // Find appropriate LUT segment
     float A = 0.5f, B = 0.0f;
@@ -560,8 +570,8 @@ float gelu_lut(float x) {
         }
     }
 
-    // lut2_sign(x) = sign(x) * (A * |x| + B)
-    float lut_result = sign_x * (A * abs_x + B);
+    // lut2_sign(x) = A * |x| + B  (always positive due to SGN_UPDATE)
+    float lut_result = A * abs_x + B;
 
     // result = 0.5 * x + lut_result
     return 0.5f * x + lut_result;
@@ -655,32 +665,33 @@ For tiny positive inputs (~1e-38 to ~1e-10), the Chebyshev polynomial produces a
 
 See `gelu_precision_analysis.md` for detailed ULP analysis.
 
-### Large Negative Value Bug (Fast/LUT Mode)
+### Large Input Value Behavior (Fast/LUT Mode)
 
-**Critical:** The fast/LUT mode returns `x` instead of `~0` for large negative inputs (|x| >= 3).
+**Correction (2025-12-30):** Hardware testing confirmed that the fast/LUT mode correctly handles large inputs. The previously documented "bug" was based on an incorrect understanding of the `lut2_sign` function.
 
 | Input x | GELU_LUT (actual) | GELU_exact (expected) | Error |
 |---------|-------------------|----------------------|-------|
-| -10.0 | **-10.0** | ~0 | 10.0 |
-| -5.0 | **-5.0** | ~0 | 5.0 |
-| -3.0 | **-3.0** | -0.004 | 2.996 |
+| -10.0 | ~0.0 | ~0 | ~0 ✓ |
+| -5.0 | ~0.0 | ~0 | ~0 ✓ |
+| -3.0 | ~0.0 | -0.004 | ~0.004 ✓ |
 | +3.0 | +3.0 | +2.996 | 0.004 ✓ |
 | +10.0 | +10.0 | +10.0 | 0 ✓ |
 
-**Root Cause:** For the last LUT segment (|x| >= 3.0), the coefficients are A=0.5, B=0.0. The formula:
+**Correct Algorithm:** The `lut2_sign()` function uses `SFPLUTFP32_MOD0_SGN_UPDATE`, meaning the sign comes from the computation result, NOT from the input. For the last LUT segment (|x| >= 3.0), the coefficients are A=0.5, B=0.0. The formula:
 
 ```
-result = 0.5*x + sign(x) * (0.5*|x| + 0)
+lut2_sign(x) = A*|x| + B = 0.5*|x|  (always positive)
+result = 0.5*x + lut2_sign(x) = 0.5*x + 0.5*|x|
 ```
 
-For negative x: `0.5*x - 0.5*|x| = 0.5*x - 0.5*(-x) = 0.5*x + 0.5*x = x` ✗
-For positive x: `0.5*x + 0.5*|x| = 0.5*x + 0.5*x = x` ✓
+For negative x (e.g., x=-10): `0.5*(-10) + 0.5*10 = -5 + 5 = 0` ✓
+For positive x (e.g., x=+10): `0.5*(+10) + 0.5*10 = 5 + 5 = 10` ✓
 
-The implementation is symmetric when it should be asymmetric (GELU → 0 for x → -∞, GELU → x for x → +∞).
+This correctly implements the asymmetric GELU behavior (GELU → 0 for x → -∞, GELU → x for x → +∞).
 
-**Source Code Discrepancy:** In `_init_gelu_()`, the comment claims `lreg6_hi=0.0f;//7c00`, but 0x7C00 is +Infinity in FP16 (not 0.0). The hardware may interpret this specially, but the net effect produces the symmetric (buggy) behavior.
+**Minor Bug at x=0:** Fast mode returns ~-0.000104 for x=0 instead of exactly 0. This is due to the LUT intercept B=-0.000104 in the first segment [0, 0.5).
 
-**Impact:** This bug affects only the fast/LUT mode (`ttnn::gelu(tensor, true)`). The default accurate mode (Chebyshev) correctly returns ~0 for large negative inputs. **tt-train does NOT use fast mode**, so training is unaffected.
+**Source:** `runtime/sfpi/include/wormhole/sfpi_lib.h` - `lut2_sign()` with `SFPLUTFP32_MOD0_SGN_UPDATE`
 
 ---
 
