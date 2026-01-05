@@ -67,14 +67,27 @@ For all inputs, GELU should have ULP error ≤ 10. Research shows Max ULP ≤ 1 
 git clone --recurse-submodules https://github.com/tenstorrent/tt-metal.git
 cd tt-metal
 
+# Cherry-pick the reproducer tests from the bug report branch
+git fetch https://github.com/ivoitovych/tt-metal.git ivoitovych/bug-report-gelu-floor-value-ulp
+git cherry-pick FETCH_HEAD~1  # Python test + this bug report
+git cherry-pick FETCH_HEAD    # C++ test
+
 # Build (follow standard build instructions)
 ./create_venv.sh
 source python_env/bin/activate
 ./build_metal.sh --debug --build-all --enable-ccache
 
-# Run reproducer test
+# Run Python reproducer test (24 tests)
 pytest tests/ttnn/unit_tests/operations/eltwise/test_gelu_floor_value_bug.py -v -s
+
+# Run C++ reproducer test (14 tests: 10 ULP verification + 4 GELU bug reproduction)
+./build_Debug/test/ttnn/unit_tests_ttnn --gtest_filter="*GeluUlp*:*BFloat16Ulp*"
 ```
+
+**Reproducer files:**
+- Python: `tests/ttnn/unit_tests/operations/eltwise/test_gelu_floor_value_bug.py`
+- C++: `tests/ttnn/unit_tests/gtests/test_gelu_ulp_bug.cpp`
+- This report: `tests/ttnn/unit_tests/operations/eltwise/GELU_FLOOR_VALUE_BUG_REPORT.md`
 
 ### 2. Input data / link or description
 
