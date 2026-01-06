@@ -503,6 +503,51 @@ TEST_F(GeluUlpBugTest, TransitionRegionErrors) {
     EXPECT_GT(max_ulp, 500) << "Transition region should have at least one value with ULP > 500";
 }
 
+TEST_F(GeluUlpBugTest, FTZBoundaryVerification) {
+    // Test values around the FTZ (Flush-To-Zero) boundary
+    // The boundary is at x ≈ -13.21 where exp(-x²/2) = 1.18e-38 (float32 normal min)
+    // For x > -13.2, asymptotic should work correctly
+    // For x < -13.2, results are flushed to zero by hardware FTZ
+
+    std::array<uint32_t, 4> dims = {1, 1, 32, 32};
+    ttnn::Shape shape(dims);
+
+    std::cout << "\n========================================\n";
+    std::cout << "FTZ BOUNDARY VERIFICATION\n";
+    std::cout << "========================================\n";
+
+    // Values that should work (above FTZ boundary)
+    std::vector<float> working_values = {-13.0f, -12.5f, -12.0f, -11.0f, -10.0f};
+    for (float x : working_values) {
+        auto tensor = ttnn::full(shape, x, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
+        auto result = ttnn::from_device(ttnn::gelu(tensor, false));
+        float actual = static_cast<float>(result.to_vector<::bfloat16>()[0]);
+        double expected = bf16_ulp::gelu_exact(x);
+        int32_t ulp = bf16_ulp::ulp_distance_bf16(actual, static_cast<float>(expected));
+
+        std::cout << "x=" << x << ": expected=" << expected << ", actual=" << actual << ", ULP=" << ulp << "\n";
+
+        // These should have low ULP (< 100) after the fix
+        EXPECT_LT(ulp, 100) << "x=" << x << " should have ULP < 100 after asymptotic fix";
+    }
+
+    // Values at/below FTZ boundary - will be flushed to 0
+    std::vector<float> ftz_values = {-13.5f, -14.0f, -15.0f};
+    for (float x : ftz_values) {
+        auto tensor = ttnn::full(shape, x, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
+        auto result = ttnn::from_device(ttnn::gelu(tensor, false));
+        float actual = static_cast<float>(result.to_vector<::bfloat16>()[0]);
+        double expected = bf16_ulp::gelu_exact(x);
+
+        std::cout << "x=" << x << " (FTZ): expected=" << expected << ", actual=" << actual << " (FTZ returns 0)\n";
+
+        // These return 0 due to FTZ - this is a hardware limitation
+        EXPECT_FLOAT_EQ(actual, 0.0f) << "x=" << x << " returns 0 due to hardware FTZ";
+    }
+
+    std::cout << "========================================\n";
+}
+
 TEST_F(GeluUlpBugTest, SummaryStatistics) {
     // Run a subset of values and report summary statistics
     std::cout << "\n========================================\n";

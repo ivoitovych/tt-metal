@@ -36,19 +36,20 @@ inline sfpi::vFloat calculate_gelu_c6(sfpi::vFloat val) {
     v_if(abs_val < 0.125f) { result = val * (0.5f + INV_SQRT_2PI * val); }
     // Region 2: Positive saturation (x >= 3.0)
     v_elseif(val >= 3.0f) { result = val; }
-    // Region 3: Deep negative - asymptotic expansion for -13 < x < -5.5
+    // Region 3: Deep negative - asymptotic expansion for -13.2 < x < -5.5
     // GELU(x) ≈ -φ(x) where φ(x) = exp(-x²/2) / √(2π)
     //
     // Hardware limitations:
-    // 1. exp() clamps input to [-88.5, 89], so for x < -13.3 the result is clamped
+    // 1. exp() clamps input to [-88.5, 89]
     // 2. Hardware flushes denormals to zero (FTZ mode)
-    // 3. For x < -13, asymptotic produces denormals that get flushed anyway
+    // 3. exp(-87.34) = 1.18e-38 is the denormal boundary in float32
+    // 4. For x < -13.2, -x²/2 < -87.12 produces denormals that get flushed
     //
-    // For x < -13: GELU(x) ≈ -1e-40 or smaller, which rounds to 0 in BF16
-    // due to hardware denormal flush. This is unavoidable without FTZ control.
+    // GELU(-13.2) ≈ 7e-39, which is the smallest value we can compute accurately.
+    // For x < -13.2: GELU rounds to 0 due to hardware FTZ. This is unavoidable.
     v_elseif(val < -5.5f) {
-        v_if(val < -13.0f) {
-            // Below practical precision - hardware flushes denormals to 0
+        v_if(val < -13.2f) {
+            // Below practical precision - exp produces denormals, FTZ flushes to 0
             result = 0.0f;
         }
         v_else {
