@@ -32,7 +32,24 @@ namespace sfpu {
 
 inline sfpi::vFloat calculate_gelu_chebyshev(sfpi::vFloat val) {
     sfpi::vFloat result = 0.0f;
-    v_if(val >= -5.5f) {
+    sfpi::vFloat abs_val = sfpi::abs(val);
+
+    // For small inputs, use Taylor series: GELU(x) ≈ 0.5*x + 0.3989*x²
+    // This avoids the polynomial c0 constant (2.98e-05) dominating for small x
+    // Threshold 0.125 from research: https://github.com/ivoitovych/bf16_gelu_research
+    // For very tiny x (< 1e-4), x² term is negligible, so 0.5*x suffices
+    v_if(abs_val < 1e-4f) {
+        // Very tiny inputs: x² negligible, use linear approximation
+        result = val * 0.5f;
+    }
+    v_elseif(abs_val < 0.125f) {
+        // Small inputs: use quadratic Taylor series
+        // GELU(x) ≈ 0.5*x + 0.3989422804*x² (derived from Taylor expansion)
+        result = val * (0.5f + 0.3989422804f * val);
+    }
+    v_elseif(val >= -5.5f) {
+        // Core region [-5.5, 3]: use Chebyshev polynomial
+        // For x < -5.5, returning 0 is acceptable (GELU values are tiny ~1e-7 and below)
         result = POLYVAL15(
             -1.81205228163e-09,
             -4.59055119276e-08,
@@ -56,6 +73,7 @@ inline sfpi::vFloat calculate_gelu_chebyshev(sfpi::vFloat val) {
         result = setsgn(result, val);
     }
     v_endif;
+    // For x < -9, result stays 0 (GELU values are beyond BF16 precision)
 
     return result;
 }
