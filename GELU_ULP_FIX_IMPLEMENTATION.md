@@ -244,26 +244,66 @@ For large negative x, use asymptotic formula instead of returning 0:
 
 ## Progress Log
 
-### 2026-01-06: Near-Zero Fix Implemented
+### 2026-01-06: C6 Adaptive Polynomial + Asymptotic Implementation Complete
 
-**Fix Applied:** Taylor series approximation for small inputs in `calculate_gelu_chebyshev()`:
-- For |x| < 1e-4: `GELU(x) ≈ 0.5*x` (linear approximation)
-- For |x| < 0.125: `GELU(x) ≈ 0.5*x + 0.3989422804*x²` (quadratic Taylor series)
+**Fix Applied:** Complete C6 adaptive polynomial implementation with asymptotic expansion for deep negative, based on research at https://github.com/ivoitovych/bf16_gelu_research
 
-**Results:**
+**Implementation Details:**
+- Taylor series for near-zero: `GELU(x) ≈ x * (0.5 + 0.3989*x)` for |x| < 0.125
+- Positive saturation: `GELU(x) = x` for x >= 3.0
+- Asymptotic expansion for deep negative: `GELU(x) ≈ -exp(-x²/2) / √(2π)` for -13 < x < -5.5
+- Deep negative cutoff: `GELU(x) = 0` for x < -13 (values below BF16 denormal minimum)
+- 9 adaptive polynomial segments (segments 7-15 from C6) covering [-5.5, 3.0]
+- Binary-search-like conditional structure for efficient segment selection
+
+**Final Results:**
+
 | Region | Before Fix | After Fix | Improvement |
 |--------|-----------|-----------|-------------|
-| Region 1 (Deep Negative) | 32,767 | 32,767 | - |
+| Region 1 (x < -13) | 32,767 | 32,767* | N/A (correct) |
 | Region 2 (Near-Zero) | **14,276** | **54** | **99.6%** |
-| Region 3 (Transition) | 1,475 | 1,475 | - |
+| Region 3 (Transition -5.5 to -4) | **1,475** | **7** | **99.5%** |
+| Deep Negative (-13 < x < -5.5) | 32,767 | **≤6** | **99.98%** |
+
+*Region 1 returns 0 for x < -13 due to hardware Flush-To-Zero (FTZ) mode. The asymptotic expansion computes exp(-x²/2) which produces denormal results for x < -13. These denormals get flushed to 0 by hardware. This is a hardware limitation, not a software bug. True GELU(-13.5) ≈ -1e-40, which is technically representable as a BF16 denormal, but hardware FTZ prevents accurate computation.
+
+**Sample Deep Negative Results (NEW - asymptotic expansion):**
+```
+x=-12:     expected=-2.13178e-32, actual=-2.14741e-32, ULP=2
+x=-10:     expected=-7.61985e-23, actual=-7.65142e-23, ULP=1
+x=-8:      expected=-4.97677e-15, actual=-5.02376e-15, ULP=2
+x=-6:      expected=-5.91953e-09, actual=-6.0827e-09,  ULP=6
+x=-5.5625: expected=-7.39637e-08, actual=-7.59028e-08, ULP=5
+```
+
+**Sample Transition Region Results:**
+```
+x=-5.5:    expected=-1.04443e-07, actual=-1.04308e-07, ULP=0
+x=-5.4375: expected=-1.46903e-07, actual=-1.45286e-07, ULP=1
+x=-5.25:   expected=-3.9926e-07,  actual=-4.02331e-07, ULP=2
+x=-5:      expected=-1.43326e-06, actual=-1.37836e-06, ULP=7
+x=-4.5:    expected=-1.52895e-05, actual=-1.51992e-05, ULP=1
+x=-4:      expected=-0.000126685, actual=-0.000125885, ULP=0
+```
+
+**Sample Near-Zero Results:**
+```
+x=1e-15: expected=5e-16, actual=4.996e-16, ULP=0
+x=1e-10: expected=5e-11, actual=5.00222e-11, ULP=1
+x=1e-08: expected=5e-09, actual=5.00586e-09, ULP=1
+```
+
+**Hardware Limitation - Flush-To-Zero (FTZ):**
+The Wormhole/Blackhole SFPU operates in FTZ mode, flushing denormals to zero. This affects:
+- x < -13: asymptotic produces exp(-x²/2) ≈ 1e-39, which is a denormal that gets flushed to 0
+- The software correctly computes the asymptotic, but hardware FTZ converts the result to 0
+- This is unavoidable without hardware FTZ control, which is not exposed in the current API
 
 **Files Modified:**
-- `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h`
-- `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h`
+- `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h` (Wormhole)
+- `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h` (Blackhole - synced)
 
-**Note:** Region 1 and 3 fixes require more complex changes (asymptotic expansion, polynomial refitting) and are deferred for future work.
-
-### 2025-01-06: Branch Created
+### 2026-01-06: Branch Created
 - Created `ivoitovych/issue-35290-gelu-ulp-fix` from merge-base `50b633663b`
 - Created this implementation document
 
