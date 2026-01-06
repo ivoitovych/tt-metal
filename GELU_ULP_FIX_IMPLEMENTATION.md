@@ -265,10 +265,16 @@ For large negative x, use asymptotic formula instead of returning 0:
 | Region 3 (Transition -5.5 to -4) | **1,475** | **7** | **99.5%** |
 | Deep Negative (-13 < x < -5.5) | 32,767 | **≤6** | **99.98%** |
 
-*Region 1 returns 0 for x < -13 due to hardware Flush-To-Zero (FTZ) mode. The asymptotic expansion computes exp(-x²/2) which produces denormal results for x < -13. These denormals get flushed to 0 by hardware. This is a hardware limitation, not a software bug. True GELU(-13.5) ≈ -1e-40, which is technically representable as a BF16 denormal, but hardware FTZ prevents accurate computation.
+*Region 1 returns 0 for x < -13.2 due to hardware Flush-To-Zero (FTZ) mode:
+- The float32 normal minimum is exp(-87.34) = 1.18e-38
+- For x < -13.21, -x²/2 < -87.12 produces denormals in float32
+- Hardware FTZ mode flushes these denormals to zero
+- x=-13.0 now works: GELU(-13)=-7.95e-38 with ULP=1
+- x=-13.5+ returns 0 due to FTZ (unavoidable without hardware changes)
 
 **Sample Deep Negative Results (NEW - asymptotic expansion):**
 ```
+x=-13:     expected=-7.95231e-38, actual=-7.97132e-38, ULP=1  (NEW - boundary)
 x=-12:     expected=-2.13178e-32, actual=-2.14741e-32, ULP=2
 x=-10:     expected=-7.61985e-23, actual=-7.65142e-23, ULP=1
 x=-8:      expected=-4.97677e-15, actual=-5.02376e-15, ULP=2
