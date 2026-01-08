@@ -49,9 +49,10 @@ inline sfpi::vFloat calculate_gelu_c6(sfpi::vFloat val) {
     // precision loss with very small coefficients (1e-18 to 1e-10). The asymptotic
     // expansion provides better accuracy than polynomials for this range.
     //
-    // For -13.2 < x < -5.5: Asymptotic expansion works reasonably well
+    // For -13.2 < x < -4.136: Asymptotic expansion works well
     // For x < -13.2: FTZ forces result to 0 (unavoidable hardware limitation)
-    v_elseif(val < -5.5f) {
+    // Extended from -5.5 to -4.136 to eliminate problematic segments 7-8 (Max ULP was 46)
+    v_elseif(val < -4.136f) {
         v_if(val < -13.2f) {
             // Below practical precision - exp produces denormals, FTZ flushes to 0
             result = 0.0f;
@@ -65,70 +66,56 @@ inline sfpi::vFloat calculate_gelu_c6(sfpi::vFloat val) {
         }
         v_endif;
     }
-    // Region 4: C6 adaptive polynomial segments [-5.5, 3.0]
-    // Segments 7-15 from C6 research cover this range with good accuracy
+    // Region 4: C6 adaptive polynomial segments [-4.136, 3.0]
+    // Segments 9-15 from C6 research cover this range with good accuracy
     v_else {
-        // Segment 7: [-5.5, -5.095]
-        v_if(val < -5.095f) {
-            sfpi::vFloat u = (val - sfpi::vFloat(-5.5745f)) * sfpi::vFloat(1.0f / 0.4796f);
-            result = POLY4(-7.138e-08f, -1.697e-07f, -2.284e-07f, -2.645e-07f, -1.465e-07f, u);
+        v_if(val < -2.218f) {
+            // Segments 9-10: [-4.136, -2.218]
+            v_if(val < -3.177f) {
+                // Segment 9: [-4.136, -3.177]
+                sfpi::vFloat u = (val - sfpi::vFloat(-3.6563f)) * sfpi::vFloat(1.0f / 0.4796f);
+                result = POLY4(-4.680e-04f, -8.088e-04f, -6.515e-04f, -3.353e-04f, -1.001e-04f, u);
+            }
+            v_else {
+                // Segment 10: [-3.177, -2.218]
+                sfpi::vFloat u = (val - sfpi::vFloat(-2.6971f)) * sfpi::vFloat(1.0f / 0.4796f);
+                result = POLY4(-9.432e-03f, -1.192e-02f, -6.379e-03f, -1.642e-03f, -1.110e-04f, u);
+            }
+            v_endif;
         }
         v_else {
-            // Segments 8-15: [-5.095, 3.0]
-            v_if(val < -2.218f) {
-                // Segments 8-10: [-5.095, -2.218]
-                v_if(val < -4.136f) {
-                    // Segment 8: [-5.095, -4.136]
-                    sfpi::vFloat u = (val - sfpi::vFloat(-4.6154f)) * sfpi::vFloat(1.0f / 0.4796f);
-                    result = POLY4(-9.126e-06f, -1.940e-05f, -2.070e-05f, -1.643e-05f, -7.190e-06f, u);
-                }
-                v_elseif(val < -3.177f) {
-                    // Segment 9: [-4.136, -3.177]
-                    sfpi::vFloat u = (val - sfpi::vFloat(-3.6563f)) * sfpi::vFloat(1.0f / 0.4796f);
-                    result = POLY4(-4.680e-04f, -8.088e-04f, -6.515e-04f, -3.353e-04f, -1.001e-04f, u);
+            // Segments 11-15: [-2.218, 3.0]
+            v_if(val < -0.299f) {
+                // Segments 11-12: [-2.218, -0.299]
+                v_if(val < -1.258f) {
+                    // Segment 11: [-2.218, -1.258]
+                    sfpi::vFloat u = (val - sfpi::vFloat(-1.7380f)) * sfpi::vFloat(1.0f / 0.4796f);
+                    result = POLY4(-7.144e-02f, -5.377e-02f, -1.033e-02f, 2.968e-03f, 1.521e-03f, u);
                 }
                 v_else {
-                    // Segment 10: [-3.177, -2.218]
-                    sfpi::vFloat u = (val - sfpi::vFloat(-2.6971f)) * sfpi::vFloat(1.0f / 0.4796f);
-                    result = POLY4(-9.432e-03f, -1.192e-02f, -6.379e-03f, -1.642e-03f, -1.110e-04f, u);
+                    // Segment 12: [-1.258, -0.299]
+                    sfpi::vFloat u = (val - sfpi::vFloat(-0.7789f)) * sfpi::vFloat(1.0f / 0.4796f);
+                    result = POLY4(-1.698e-01f, -5.330e-03f, 4.721e-02f, 1.369e-02f, -1.364e-04f, u);
                 }
                 v_endif;
             }
             v_else {
-                // Segments 11-15: [-2.218, 3.0]
-                v_if(val < -0.299f) {
-                    // Segments 11-12: [-2.218, -0.299]
-                    v_if(val < -1.258f) {
-                        // Segment 11: [-2.218, -1.258]
-                        sfpi::vFloat u = (val - sfpi::vFloat(-1.7380f)) * sfpi::vFloat(1.0f / 0.4796f);
-                        result = POLY4(-7.144e-02f, -5.377e-02f, -1.033e-02f, 2.968e-03f, 1.521e-03f, u);
-                    }
-                    v_else {
-                        // Segment 12: [-1.258, -0.299]
-                        sfpi::vFloat u = (val - sfpi::vFloat(-0.7789f)) * sfpi::vFloat(1.0f / 0.4796f);
-                        result = POLY4(-1.698e-01f, -5.330e-03f, 4.721e-02f, 1.369e-02f, -1.364e-04f, u);
-                    }
-                    v_endif;
+                // Segments 13-15: [-0.299, 3.0]
+                // Note: Near-zero already handled by Taylor series
+                v_if(val < 0.660f) {
+                    // Segment 13: [-0.299, 0.660]
+                    sfpi::vFloat u = (val - sfpi::vFloat(0.1803f)) * sfpi::vFloat(1.0f / 0.4796f);
+                    result = POLY4(1.030e-01f, 3.079e-01f, 8.875e-02f, -4.874e-03f, -3.119e-03f, u);
+                }
+                v_elseif(val < 1.644f) {
+                    // Segment 14: [0.660, 1.644]
+                    sfpi::vFloat u = (val - sfpi::vFloat(1.1517f)) * sfpi::vFloat(1.0f / 0.4919f);
+                    result = POLY4(1.008e+00f, 5.469e-01f, 1.679e-02f, -1.223e-02f, 1.632e-03f, u);
                 }
                 v_else {
-                    // Segments 13-15: [-0.299, 3.0]
-                    // Note: Near-zero already handled by Taylor series
-                    v_if(val < 0.660f) {
-                        // Segment 13: [-0.299, 0.660]
-                        sfpi::vFloat u = (val - sfpi::vFloat(0.1803f)) * sfpi::vFloat(1.0f / 0.4796f);
-                        result = POLY4(1.030e-01f, 3.079e-01f, 8.875e-02f, -4.874e-03f, -3.119e-03f, u);
-                    }
-                    v_elseif(val < 1.644f) {
-                        // Segment 14: [0.660, 1.644]
-                        sfpi::vFloat u = (val - sfpi::vFloat(1.1517f)) * sfpi::vFloat(1.0f / 0.4919f);
-                        result = POLY4(1.008e+00f, 5.469e-01f, 1.679e-02f, -1.223e-02f, 1.632e-03f, u);
-                    }
-                    v_else {
-                        // Segment 15: [1.644, 3.0]
-                        sfpi::vFloat u = (val - sfpi::vFloat(2.3218f)) * sfpi::vFloat(1.0f / 0.6782f);
-                        result = POLY4(2.298e+00f, 7.140e-01f, -2.108e-02f, 3.512e-03f, 1.348e-03f, u);
-                    }
-                    v_endif;
+                    // Segment 15: [1.644, 3.0]
+                    sfpi::vFloat u = (val - sfpi::vFloat(2.3218f)) * sfpi::vFloat(1.0f / 0.6782f);
+                    result = POLY4(2.298e+00f, 7.140e-01f, -2.108e-02f, 3.512e-03f, 1.348e-03f, u);
                 }
                 v_endif;
             }

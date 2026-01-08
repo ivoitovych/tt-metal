@@ -12,16 +12,16 @@
 
 ## Summary
 
-The C6 Adaptive Polynomial GELU implementation achieves **Max ULP = 46** across the entire BF16 range
+The C6 Adaptive Polynomial GELU implementation achieves **Max ULP = 11** across the entire BF16 range
 when measured with the correct DAZ+FTZ (Denormals-Are-Zero + Flush-To-Zero) hardware model.
 
 ### Key Results (DAZ+FTZ Model)
 
 | Metric | Value |
 |--------|-------|
-| **Max ULP** | 46 (at x = -5.094, segment 8 boundary) |
-| **Mean ULP** | 0.01 |
-| **ULP ≤ 1** | 99.78% of values |
+| **Max ULP** | 11 (at x = -4.188, asymptotic/polynomial boundary) |
+| **Mean ULP** | 0.02 |
+| **ULP ≤ 1** | 99.67% of values |
 | **ULP > 100** | 0% of values |
 
 ### Per-Segment ULP Analysis
@@ -30,8 +30,8 @@ when measured with the correct DAZ+FTZ (Denormals-Are-Zero + Flush-To-Zero) hard
 |---------|-------|------:|----------:|--------:|--------:|
 | Deep neg (FTZ) | x < -13.2 | 15,916 | 0.00 | 0 | N/A |
 | Deep neg (asymp) | [-13.2, -5.5] | 163 | 2.78 | 7 | -5.969 |
-| Seg 7 | [-5.5, -5.095] | 13 | 0.92 | 3 | -5.219 |
-| **Seg 8** | **[-5.095, -4.136]** | 31 | **4.26** | **46** | **-5.094** |
+| Asymp ext | [-5.5, -5.095] | 13 | 6.15 | 8 | -5.125 |
+| Asymp ext | [-5.095, -4.136] | 31 | 7.90 | **11** | -4.188 |
 | Seg 9 | [-4.136, -3.177] | 57 | 0.39 | 3 | -4.125 |
 | Seg 10 | [-3.177, -2.218] | 62 | 0.05 | 1 | -2.984 |
 | Seg 11 | [-2.218, -1.258] | 108 | 0.03 | 1 | -1.852 |
@@ -43,18 +43,17 @@ when measured with the correct DAZ+FTZ (Denormals-Are-Zero + Flush-To-Zero) hard
 | Seg 14 | [0.660, 1.644] | 170 | 0.01 | 1 | 0.852 |
 | Seg 15 | [1.644, 3.0] | 109 | 0.04 | 1 | 1.680 |
 | Positive sat | x >= 3.0 | 16,192 | 0.01 | 1 | 3.000 |
-| **OVERALL** | | **65,024** | **0.01** | **46** | |
+| **OVERALL** | | **65,024** | **0.02** | **11** | |
 
 ### Cumulative Distribution
 
 | ULP ≤ | Count | Percent |
 |------:|------:|--------:|
 | 0 | 64,593 | 99.34% |
-| 1 | 64,879 | 99.78% |
-| 3 | 64,969 | 99.92% |
-| 7 | 65,011 | 99.98% |
-| 10 | 65,022 | 100.00% |
-| 46 | 65,024 | 100.00% |
+| 1 | 64,858 | 99.74% |
+| 3 | 64,948 | 99.88% |
+| 7 | 64,990 | 99.95% |
+| 11 | 65,024 | 100.00% |
 
 ### Hardware Model Correction
 
@@ -230,11 +229,12 @@ v_endif;
 Replace single Chebyshev with segmented adaptive polynomial:
 
 ```cpp
-// 9 segments with optimized coefficients (C6 segments 7-15)
+// 7 segments with optimized coefficients (C6 segments 9-15)
+// Extended asymptotic expansion covers [-13.2, -4.136]
 // See: https://github.com/ivoitovych/bf16_gelu_research/blob/main/adaptive_poly.cpp
 ```
 
-**Result:** Max ULP = 46 (research shows Max ULP = 1 is theoretically achievable with all 16 segments)
+**Result:** Max ULP = 11 (extended asymptotic approach outperforms polynomial segments 7-8)
 
 ### Fix 4: Asymptotic Tail Expansion
 
@@ -264,7 +264,7 @@ For large negative x, use asymptotic formula instead of returning 0:
 
 ### Phase 4: Validation
 - [x] Run full BF16 sweep (65,024 non-denormal values)
-- [x] Verify Max ULP is acceptable: **Max ULP = 46** (at segment boundary)
+- [x] Verify Max ULP is acceptable: **Max ULP = 11** (at asymptotic/polynomial boundary)
 - [x] Run existing GELU tests to ensure no regression
 
 ### Phase 5: PR Preparation
@@ -280,7 +280,7 @@ For large negative x, use asymptotic formula instead of returning 0:
 |------|--------|-------------|
 | `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h` | ✅ Modified | C6 adaptive polynomial implementation |
 | `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h` | ✅ Modified | Same implementation (synced) |
-| `tests/ttnn/unit_tests/gtests/test_gelu_ulp_bug.cpp` | ✅ Added | C++ test suite (18 tests: 10 ULP calculator + 8 device) |
+| `tests/ttnn/unit_tests/gtests/test_gelu_ulp_bug.cpp` | ✅ Added | C++ test suite (21 tests: 10 ULP calculator + 11 device) |
 | `tests/ttnn/unit_tests/gtests/CMakeLists.txt` | ✅ Modified | Added test_gelu_ulp_bug.cpp |
 | `tests/ttnn/unit_tests/operations/eltwise/test_gelu_floor_value_bug.py` | ✅ Added | Python test suite (27 tests) |
 | `tests/ttnn/unit_tests/operations/eltwise/GELU_FLOOR_VALUE_BUG_REPORT.md` | ✅ Added | Bug report documentation |
@@ -302,9 +302,9 @@ For large negative x, use asymptotic formula instead of returning 0:
 **Implementation Details:**
 - Taylor series for near-zero: `GELU(x) ≈ x * (0.5 + 0.3989*x)` for |x| < 0.125
 - Positive saturation: `GELU(x) = x` for x >= 3.0
-- Asymptotic expansion for deep negative: `GELU(x) ≈ -exp(-x²/2) / √(2π)` for -13 < x < -5.5
-- Deep negative cutoff: `GELU(x) = 0` for x < -13 (values below BF16 denormal minimum)
-- 9 adaptive polynomial segments (segments 7-15 from C6) covering [-5.5, 3.0]
+- Asymptotic expansion for deep negative: `GELU(x) ≈ -exp(-x²/2) / √(2π)` for -13.2 < x < -4.136
+- Deep negative cutoff: `GELU(x) = 0` for x < -13.2 (values below BF16 denormal minimum)
+- 7 adaptive polynomial segments (segments 9-15 from C6) covering [-4.136, 3.0]
 - Binary-search-like conditional structure for efficient segment selection
 
 **Final Results (DAZ+FTZ Model):**
@@ -312,8 +312,8 @@ For large negative x, use asymptotic formula instead of returning 0:
 | Region | Before Fix (incorrect model) | After Fix (DAZ+FTZ) | Notes |
 |--------|------------------------------|---------------------|-------|
 | FTZ Region (x < -13.2) | 32,767 | 0 | Both expected and actual are 0 |
-| Asymptotic (-13.2 to -5.5) | 32,767 | **7** | Asymptotic expansion works |
-| Polynomial Segments | 1,475 | **46** | Seg 8 boundary worst case |
+| Asymptotic (-13.2 to -4.136) | 32,767 | **11** | Extended asymptotic works well |
+| Polynomial Segments | 1,475 | **3** | Segments 9-15 have low error |
 | Near-Zero (Taylor) | 14,276 | **1** | Taylor series accurate |
 | Positive Saturation | 0 | **1** | Identity function |
 
@@ -324,19 +324,20 @@ For large negative x, use asymptotic formula instead of returning 0:
 
 **Sample Results by Region (DAZ+FTZ model):**
 
-Deep Negative (Asymptotic):
+Deep Negative (Asymptotic, extended to -4.136):
 ```
-x=-5.969:  Max ULP in asymptotic region = 7
-x=-6.0:    ULP ≤ 7 (asymptotic expansion)
+x=-5.969:  ULP = 7 (within asymptotic region)
+x=-5.125:  ULP = 8 (extended asymptotic region)
+x=-4.188:  Max ULP = 11 (worst case, asymptotic/polynomial boundary)
 x=-10.0:   ULP ≤ 3
 x=-13.0:   ULP ≤ 2 (boundary of FTZ region)
 ```
 
-Polynomial Segments:
+Polynomial Segments (9-15):
 ```
-x=-5.094:  Max ULP = 46 (segment 8 boundary - worst case)
 x=-4.125:  Max ULP = 3 (segment 9)
 x=-2.984:  Max ULP = 1 (segment 10)
+x=-1.852:  Max ULP = 1 (segment 11)
 ```
 
 Near-Zero (Taylor series):
@@ -362,15 +363,40 @@ x=3.0:     Max ULP = 1 (identity function region)
 - Original bug report overstated errors by not accounting for hardware denormal handling
 
 **Test Results:**
-- C++ tests: 18 passed (10 BFloat16UlpTest + 8 GeluUlpBugTest)
+- C++ tests: 21 passed (10 BFloat16UlpTest + 11 GeluUlpBugTest)
 - Python tests: 27 passed (test_gelu_floor_value_bug.py)
 - All tests verify fix works (low ULP) rather than asserting old buggy behavior
 
 **Final Verification:**
 - Comprehensive BF16 sweep: 65,024 non-denormal values tested
-- Max ULP: 46 (at segment 8 boundary x = -5.094)
-- Mean ULP: 0.01
-- 99.78% of values have ULP ≤ 1
+- Max ULP: 11 (at asymptotic/polynomial boundary x = -4.188)
+- Mean ULP: 0.02
+- 99.67% of values have ULP ≤ 1
+
+### 2026-01-08: Extended Asymptotic Expansion (Seg 8 Fix)
+
+**Problem:** Polynomial segments 7-8 had poor accuracy at boundary (Max ULP = 46 at x = -5.094)
+
+**Solution:** Extended asymptotic expansion from x < -5.5 to x < -4.136, eliminating segments 7-8
+
+**Changes:**
+- Asymptotic expansion now covers [-13.2, -4.136] (was [-13.2, -5.5])
+- Removed polynomial segments 7 and 8 (problematic boundary region)
+- Polynomial segments 9-15 now cover [-4.136, 3.0]
+
+**Results:**
+| Metric | Before | After | Improvement |
+|--------|--------|-------|-------------|
+| Max ULP | 46 | **11** | 76% reduction |
+| Mean ULP | 0.01 | 0.02 | Slight increase |
+| Worst x | -5.094 | -4.188 | New boundary |
+
+**New Tests Added:**
+- `SubnormalOutputsFlushedToZero` - Verifies FTZ behavior (262 inputs)
+- `MonotonicityVerification` - Verifies GELU monotonicity (65,026 values)
+- `DenormalInputsProduceSameOutputAsZero` - Verifies DAZ behavior (254 inputs)
+
+**Test Suite:** 21 C++ tests + 27 Python tests = 48 total tests
 
 ---
 
