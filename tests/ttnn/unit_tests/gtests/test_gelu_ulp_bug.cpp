@@ -1037,4 +1037,319 @@ TEST_F(GeluUlpBugTest, SummaryStatistics) {
     EXPECT_LE(overall_max, 50) << "Overall Max ULP should be <= 50, got " << overall_max;
 }
 
+TEST_F(GeluUlpBugTest, SubnormalOutputsFlushedToZero) {
+    // Verify that all inputs whose reference GELU produces subnormal outputs
+    // are returned as exactly zero by the hardware (FTZ behavior).
+    //
+    // BF16 subnormal range: exponent = 0, mantissa != 0
+    // This corresponds to values with magnitude < 2^-126 ≈ 1.18e-38
+    //
+    // GELU produces tiny outputs for deep negative x (approaching 0 from below)
+    // and for tiny positive x (GELU(x) ≈ 0.5*x for small x).
+
+    std::array<uint32_t, 4> dims = {1, 1, 32, 32};
+    ttnn::Shape shape(dims);
+
+    std::cout << "\n============================================================\n";
+    std::cout << "SUBNORMAL OUTPUT VERIFICATION (FTZ BEHAVIOR)\n";
+    std::cout << "============================================================\n";
+    std::cout << "Checking that inputs producing subnormal reference outputs\n";
+    std::cout << "return exactly zero from hardware (Flush-To-Zero).\n\n";
+
+    int32_t subnormal_output_count = 0;
+    int32_t flushed_to_zero_count = 0;
+    int32_t not_flushed_count = 0;
+    std::vector<std::tuple<float, double, float>> failures;  // (input, expected, actual)
+
+    // Iterate through all valid BF16 bit patterns
+    for (uint32_t bits = 0; bits <= 0xFFFF; ++bits) {
+        uint16_t bf16_bits = static_cast<uint16_t>(bits);
+
+        // Skip NaN and Inf
+        uint16_t exp_bits = (bf16_bits >> 7) & 0xFF;
+        if (exp_bits == 0xFF) {
+            continue;
+        }
+
+        // Skip input denormals (they map to zero input anyway)
+        if (bf16_ulp::is_bf16_denormal(bf16_bits)) {
+            continue;
+        }
+
+        float x = bf16_ulp::bf16_bits_to_float(bf16_bits);
+
+        // Compute reference GELU in double precision
+        double expected_f64 = bf16_ulp::gelu_exact(x);
+
+        // Check if expected output is subnormal when converted to BF16
+        // BF16 subnormal: |value| < 2^-126 and value != 0
+        float expected_f32 = static_cast<float>(expected_f64);
+        uint16_t expected_bf16_bits = bf16_ulp::float_to_bf16_bits(expected_f32);
+
+        if (bf16_ulp::is_bf16_denormal(expected_bf16_bits)) {
+            subnormal_output_count++;
+
+            // Run GELU on device
+            auto tensor = ttnn::full(shape, x, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
+            auto result = ttnn::from_device(ttnn::gelu(tensor, false));
+            float actual = static_cast<float>(result.to_vector<::bfloat16>()[0]);
+
+            if (actual == 0.0f) {
+                flushed_to_zero_count++;
+            } else {
+                not_flushed_count++;
+                if (failures.size() < 20) {
+                    failures.push_back({x, expected_f64, actual});
+                }
+            }
+        }
+    }
+
+    std::cout << "Inputs producing subnormal reference outputs: " << subnormal_output_count << "\n";
+    std::cout << "Correctly flushed to zero:                    " << flushed_to_zero_count << "\n";
+    std::cout << "NOT flushed (failures):                       " << not_flushed_count << "\n";
+
+    if (!failures.empty()) {
+        std::cout << "\nFAILURES (first " << failures.size() << "):\n";
+        std::cout << std::string(70, '-') << "\n";
+        std::cout << std::left << std::setw(15) << "Input x" << std::setw(20) << "Expected" << std::setw(20) << "Actual"
+                  << "\n";
+        std::cout << std::string(70, '-') << "\n";
+        for (const auto& [x, exp, act] : failures) {
+            std::cout << std::scientific << std::setprecision(6) << std::left << std::setw(15) << x << std::setw(20)
+                      << exp << std::setw(20) << act << "\n";
+        }
+    }
+
+    std::cout << "============================================================\n";
+
+    // All subnormal outputs should be flushed to zero
+    EXPECT_EQ(not_flushed_count, 0) << "Expected all subnormal outputs to be flushed to zero, but " << not_flushed_count
+                                    << " were not";
+}
+
+TEST_F(GeluUlpBugTest, MonotonicityVerification) {
+    // Verify GELU output monotonicity:
+    // - GELU is monotonically DESCENDING from -inf until the local minimum at x ≈ -0.75
+    // - GELU is monotonically ASCENDING from the local minimum to +inf
+    //
+    // The exact local minimum of GELU is at x ≈ -0.7523 where GELU(x) ≈ -0.1704
+    // For BF16, we approximate this as x ≈ -0.75
+    //
+    // NOTE: Due to polynomial approximation errors (especially at segment boundaries),
+    // we allow small relative tolerance violations. The known worst case is at x=-5.094
+    // where Max ULP = 46. Gross monotonicity violations indicate implementation bugs.
+
+    std::array<uint32_t, 4> dims = {1, 1, 32, 32};
+    ttnn::Shape shape(dims);
+
+    std::cout << "\n============================================================\n";
+    std::cout << "MONOTONICITY VERIFICATION\n";
+    std::cout << "============================================================\n";
+    std::cout << "GELU should be descending for x < -0.75 (local minimum)\n";
+    std::cout << "GELU should be ascending for x > -0.75\n";
+    std::cout << "Small violations at segment boundaries are tolerated.\n\n";
+
+    // Collect all (x, gelu(x)) pairs for non-denormal BF16 values
+    std::vector<std::pair<float, float>> values;
+
+    for (uint32_t bits = 0; bits <= 0xFFFF; ++bits) {
+        uint16_t bf16_bits = static_cast<uint16_t>(bits);
+
+        // Skip NaN and Inf
+        uint16_t exp_bits = (bf16_bits >> 7) & 0xFF;
+        if (exp_bits == 0xFF) {
+            continue;
+        }
+
+        // Skip denormals
+        if (bf16_ulp::is_bf16_denormal(bf16_bits)) {
+            continue;
+        }
+
+        float x = bf16_ulp::bf16_bits_to_float(bf16_bits);
+
+        // Run GELU on device
+        auto tensor = ttnn::full(shape, x, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
+        auto result = ttnn::from_device(ttnn::gelu(tensor, false));
+        float actual = static_cast<float>(result.to_vector<::bfloat16>()[0]);
+
+        values.push_back({x, actual});
+    }
+
+    // Sort by x value
+    std::sort(values.begin(), values.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    // Find approximate local minimum (around x = -0.75)
+    // We'll use -0.85 and -0.65 as bounds to find the minimum region
+    const float MIN_REGION_LOW = -0.85f;
+    const float MIN_REGION_HIGH = -0.65f;
+
+    // Tolerance: allow violations where adjacent outputs differ by at most 5 ULP
+    // This catches gross monotonicity bugs while allowing small approximation errors
+    // at segment boundaries (known worst case: x=-5.094 with Max ULP=46)
+    const int32_t ULP_TOLERANCE = 5;
+
+    int32_t descending_violations = 0;
+    int32_t ascending_violations = 0;
+    int32_t small_violations_tolerated = 0;
+    std::vector<std::tuple<float, float, float, float, int32_t, std::string>>
+        violations;  // (x1, y1, x2, y2, ulp_diff, region)
+
+    for (size_t i = 1; i < values.size(); ++i) {
+        float x_prev = values[i - 1].first;
+        float y_prev = values[i - 1].second;
+        float x_curr = values[i].first;
+        float y_curr = values[i].second;
+
+        // Skip the local minimum region where monotonicity changes
+        if (x_prev >= MIN_REGION_LOW && x_curr <= MIN_REGION_HIGH) {
+            continue;
+        }
+
+        // Calculate ULP distance between adjacent outputs
+        int32_t ulp_diff = bf16_ulp::ulp_distance_bf16_daz(y_prev, y_curr);
+
+        if (x_curr < MIN_REGION_LOW) {
+            // Descending region: y should decrease (or stay same) as x increases
+            // This means y_curr should be <= y_prev
+            if (y_curr > y_prev) {
+                if (ulp_diff <= ULP_TOLERANCE) {
+                    small_violations_tolerated++;
+                } else {
+                    descending_violations++;
+                    if (violations.size() < 10) {
+                        violations.push_back({x_prev, y_prev, x_curr, y_curr, ulp_diff, "descending"});
+                    }
+                }
+            }
+        } else if (x_prev > MIN_REGION_HIGH) {
+            // Ascending region: y should increase (or stay same) as x increases
+            // This means y_curr should be >= y_prev
+            if (y_curr < y_prev) {
+                if (ulp_diff <= ULP_TOLERANCE) {
+                    small_violations_tolerated++;
+                } else {
+                    ascending_violations++;
+                    if (violations.size() < 10) {
+                        violations.push_back({x_prev, y_prev, x_curr, y_curr, ulp_diff, "ascending"});
+                    }
+                }
+            }
+        }
+    }
+
+    // Find actual minimum
+    auto min_it = std::min_element(
+        values.begin(), values.end(), [](const auto& a, const auto& b) { return a.second < b.second; });
+
+    std::cout << "Total BF16 values tested: " << values.size() << "\n";
+    std::cout << "Local minimum found at:   x = " << min_it->first << ", GELU(x) = " << min_it->second << "\n";
+    std::cout << "Small violations tolerated (ULP <= " << ULP_TOLERANCE << "): " << small_violations_tolerated << "\n";
+    std::cout << "Gross descending violations (x < " << MIN_REGION_LOW << "): " << descending_violations << "\n";
+    std::cout << "Gross ascending violations (x > " << MIN_REGION_HIGH << "):  " << ascending_violations << "\n";
+
+    if (!violations.empty()) {
+        std::cout << "\nGROSS VIOLATIONS (first " << violations.size() << "):\n";
+        std::cout << std::string(100, '-') << "\n";
+        std::cout << std::left << std::setw(12) << "x_prev" << std::setw(15) << "GELU(x_prev)" << std::setw(12)
+                  << "x_curr" << std::setw(15) << "GELU(x_curr)" << std::setw(10) << "ULP diff" << std::setw(12)
+                  << "Region" << "\n";
+        std::cout << std::string(100, '-') << "\n";
+        for (const auto& [x1, y1, x2, y2, ulp, region] : violations) {
+            std::cout << std::scientific << std::setprecision(3) << std::left << std::setw(12) << x1 << std::setw(15)
+                      << y1 << std::setw(12) << x2 << std::setw(15) << y2 << std::fixed << std::setw(10) << ulp
+                      << std::setw(12) << region << "\n";
+        }
+    }
+
+    std::cout << "============================================================\n";
+
+    // Verify no gross monotonicity violations (1 ULP violations tolerated at segment boundaries)
+    EXPECT_EQ(descending_violations, 0) << "GELU should be monotonically descending for x < " << MIN_REGION_LOW;
+    EXPECT_EQ(ascending_violations, 0) << "GELU should be monotonically ascending for x > " << MIN_REGION_HIGH;
+}
+
+TEST_F(GeluUlpBugTest, DenormalInputsProduceSameOutputAsZero) {
+    // Verify that all BF16 denormal inputs produce the same output as zero input (DAZ behavior).
+    //
+    // Per tech_reports/Handling_Special_Value/special_values.md:
+    // "denormals | all | 0x0" - the hardware treats all denormals as zero.
+    //
+    // BF16 denormals: exponent = 0, mantissa != 0
+    // Positive denormals: 0x0001 to 0x007F (127 values)
+    // Negative denormals: 0x8001 to 0x807F (127 values)
+    // Total: 254 denormal values (excluding ±0)
+
+    std::array<uint32_t, 4> dims = {1, 1, 32, 32};
+    ttnn::Shape shape(dims);
+
+    std::cout << "\n============================================================\n";
+    std::cout << "DENORMAL INPUT VERIFICATION (DAZ BEHAVIOR)\n";
+    std::cout << "============================================================\n";
+    std::cout << "Checking that all denormal inputs produce same output as zero.\n";
+    std::cout << "Hardware treats denormals as zero (DAZ = Denormals-Are-Zero).\n\n";
+
+    // First, get GELU(0)
+    auto zero_tensor = ttnn::full(shape, 0.0f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
+    auto zero_result = ttnn::from_device(ttnn::gelu(zero_tensor, false));
+    float gelu_zero = static_cast<float>(zero_result.to_vector<::bfloat16>()[0]);
+
+    std::cout << "GELU(0) = " << gelu_zero << "\n\n";
+
+    int32_t denormal_count = 0;
+    int32_t match_count = 0;
+    int32_t mismatch_count = 0;
+    std::vector<std::tuple<uint16_t, float, float>> mismatches;  // (bits, input_approx, actual_output)
+
+    // Test all denormal bit patterns
+    for (uint32_t bits = 0; bits <= 0xFFFF; ++bits) {
+        uint16_t bf16_bits = static_cast<uint16_t>(bits);
+
+        if (!bf16_ulp::is_bf16_denormal(bf16_bits)) {
+            continue;
+        }
+
+        denormal_count++;
+        float x = bf16_ulp::bf16_bits_to_float(bf16_bits);
+
+        // Run GELU on device
+        auto tensor = ttnn::full(shape, x, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
+        auto result = ttnn::from_device(ttnn::gelu(tensor, false));
+        float actual = static_cast<float>(result.to_vector<::bfloat16>()[0]);
+
+        if (actual == gelu_zero) {
+            match_count++;
+        } else {
+            mismatch_count++;
+            if (mismatches.size() < 20) {
+                mismatches.push_back({bf16_bits, x, actual});
+            }
+        }
+    }
+
+    std::cout << "Total denormal inputs tested:        " << denormal_count << "\n";
+    std::cout << "Match GELU(0) = " << gelu_zero << ":             " << match_count << "\n";
+    std::cout << "Mismatches (different from GELU(0)): " << mismatch_count << "\n";
+
+    if (!mismatches.empty()) {
+        std::cout << "\nMISMATCHES (first " << mismatches.size() << "):\n";
+        std::cout << std::string(60, '-') << "\n";
+        std::cout << std::left << std::setw(12) << "BF16 bits" << std::setw(20) << "Input (approx)" << std::setw(20)
+                  << "GELU output" << "\n";
+        std::cout << std::string(60, '-') << "\n";
+        for (const auto& [bits, x, output] : mismatches) {
+            std::cout << "0x" << std::hex << std::setw(4) << std::setfill('0') << bits << std::dec << std::setfill(' ')
+                      << "      " << std::scientific << std::setprecision(6) << std::left << std::setw(20) << x
+                      << std::setw(20) << output << "\n";
+        }
+    }
+
+    std::cout << "============================================================\n";
+
+    // All denormal inputs should produce the same output as zero
+    EXPECT_EQ(mismatch_count, 0) << "Expected all denormal inputs to produce GELU(0) = " << gelu_zero << ", but "
+                                 << mismatch_count << " produced different values";
+}
+
 }  // namespace ttnn::test
