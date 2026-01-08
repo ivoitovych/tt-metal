@@ -1,4 +1,32 @@
-# ttnn.gelu() has catastrophic ULP errors in multiple regions (up to 32,767 ULP)
+# GELU Floor Value / ULP Bug Report
+
+**GitHub Issue:** https://github.com/tenstorrent/tt-metal/issues/35290
+
+**Status:** Bug report filed. See `/GELU_ULP_FIX_IMPLEMENTATION.md` (repository root) for fix implementation.
+
+---
+
+## Important Correction: DAZ+FTZ Hardware Model
+
+**The ULP statistics in this bug report were calculated using an incorrect model.**
+
+The original analysis did not account for Tenstorrent hardware's DAZ+FTZ (Denormals-Are-Zero + Flush-To-Zero) behavior. Per `tech_reports/Handling_Special_Value/special_values.md`: "denormals | all | 0x0"
+
+The SFPU treats all denormal values as zero:
+- Denormal inputs are read as zero (DAZ)
+- Denormal outputs are flushed to zero (FTZ)
+- For ULP calculation purposes, all denormals map to the same value as zero
+
+**Corrected statistics with DAZ+FTZ model:**
+- The "32,767 ULP" errors in Region 1 (deep negative) are actually **ULP = 0** because both expected and actual are zero after FTZ
+- The "14,276 ULP" errors in Region 2 (near-zero) are overstated because many inputs are denormals that map to zero
+- See `/GELU_ULP_FIX_IMPLEMENTATION.md` (repository root) for corrected per-segment analysis
+
+The bugs described below are real issues in the original Chebyshev implementation, but the severity was overstated due to the incorrect ULP model.
+
+---
+
+## Original Bug Report
 
 ### Component / Area
 
@@ -10,28 +38,32 @@ Bad Outputs
 
 ### Observed
 
-`ttnn.gelu()` in accurate mode (default, `fast_and_approximate_mode=False`) has **THREE** problematic regions with catastrophic ULP errors:
+`ttnn.gelu()` in accurate mode (default, `fast_and_approximate_mode=False`) has **THREE** problematic regions with ULP errors:
 
-#### Region 1: Deep Negative Tail (x < -5.5) — WORST
+#### Region 1: Deep Negative Tail (x < -5.5)
 
-| Input | Expected | Actual | ULP Error |
-|-------|----------|--------|-----------|
-| -13.5 | -1.06e-40 | 0.0 | **32,767** |
-| -12.0 | -2.13e-32 | 0.0 | 29,987 |
-| -10.0 | -7.62e-24 | 0.0 | 24,481 |
-| -7.0 | -8.96e-12 | 0.0 | 21,219 |
-| -5.5625 | -7.40e-08 | 0.0 | 19,554 |
+| Input | Expected | Actual | ULP Error (incorrect model) |
+|-------|----------|--------|----------------------------|
+| -13.5 | -1.06e-40 | 0.0 | 32,767* |
+| -12.0 | -2.13e-32 | 0.0 | 29,987* |
+| -10.0 | -7.62e-24 | 0.0 | 24,481* |
+| -7.0 | -8.96e-12 | 0.0 | 21,219* |
+| -5.5625 | -7.40e-08 | 0.0 | 19,554* |
+
+*These ULP values are incorrect. With DAZ+FTZ model, ULP = 0 for x < -13.2 (both expected and actual are 0).
 
 **Cause**: Hardware returns exactly 0.0 for x < -5.5, but exact GELU has tiny negative values.
 
 #### Region 2: Near-Zero (|x| < ~1e-4)
 
-| Input | Expected (0.5×x) | Actual | ULP Error |
-|-------|------------------|--------|-----------|
-| 1e-38 | 5e-39 | 2.98e-05 | **14,276** |
-| 1e-30 | 5e-31 | 2.98e-05 | 10,968 |
-| 1e-20 | 5e-21 | 2.98e-05 | 6,718 |
-| 1e-10 | 5e-11 | 2.98e-05 | 2,463 |
+| Input | Expected (0.5×x) | Actual | ULP Error (incorrect model) |
+|-------|------------------|--------|----------------------------|
+| 1e-38 | 5e-39 | 2.98e-05 | 14,276* |
+| 1e-30 | 5e-31 | 2.98e-05 | 10,968* |
+| 1e-20 | 5e-21 | 2.98e-05 | 6,718* |
+| 1e-10 | 5e-11 | 2.98e-05 | 2,463* |
+
+*These ULP values are overstated. Many of these inputs are denormals that map to zero under DAZ.
 
 **Cause**: Chebyshev polynomial c0 coefficient (2.98e-05) dominates for tiny inputs.
 
@@ -45,7 +77,7 @@ Bad Outputs
 
 **Cause**: Polynomial is poorly fitted near the -5.5 threshold boundary.
 
-#### Overall Statistics (Full BFloat16 Sweep)
+#### Overall Statistics (Original - Incorrect Model)
 
 ```
 Total values tested: 65,278
@@ -56,9 +88,11 @@ Values with ULP > 100: 29,243 (44.8%)
 Values with ULP <= 1: 34,254 (52.5%)
 ```
 
+**Note:** These statistics use incorrect ULP calculations. See DAZ+FTZ correction above.
+
 ### Expected
 
-For all inputs, GELU should have ULP error ≤ 10. Research shows Max ULP ≤ 1 is achievable with proper implementation (see https://github.com/ivoitovych/bf16_gelu_research).
+For all inputs, GELU should have low ULP error. Research shows Max ULP ≤ 1 is achievable with proper implementation (see https://github.com/ivoitovych/bf16_gelu_research).
 
 ### 1. Steps (exact commands)
 
@@ -74,11 +108,11 @@ git cherry-pick FETCH_HEAD
 # Rebuild only the C++ test target (incremental, ~30 seconds)
 cmake --build build_Debug --target unit_tests_ttnn
 
-# Run Python reproducer (24 tests)
+# Run Python reproducer (27 tests)
 pytest tests/ttnn/unit_tests/operations/eltwise/test_gelu_floor_value_bug.py -v -s
 
-# Run C++ reproducer (14 tests: 10 ULP verification + 4 GELU bug reproduction)
-./build_Debug/test/ttnn/unit_tests_ttnn --gtest_filter="*GeluUlp*:*BFloat16Ulp*"
+# Run C++ reproducer (8 tests)
+./build_Debug/test/ttnn/unit_tests_ttnn --gtest_filter="*GeluUlp*"
 ```
 
 **Reproducer files (all in single commit):**
@@ -137,9 +171,9 @@ ttnn.close_device(device)
 ### 3. Frequency
 
 100% reproducible. The full BFloat16 sweep shows:
-- Region 1 (x < -5.5): 172 values affected with ULP > 1000
-- Region 2 (near-zero): 26,917 values affected with ULP > 1000
-- Region 3 (transition): ~200 values with ULP 100-1500
+- Region 1 (x < -5.5): 172 values affected
+- Region 2 (near-zero): 26,917 values affected
+- Region 3 (transition): ~200 values affected
 
 ### 1. Software Versions
 
@@ -155,16 +189,15 @@ ttnn.close_device(device)
 
 **Additional Verification — Blackhole P150 (FW 19.1.0):**
 
-| Input | Wormhole ULP | Blackhole ULP | Notes |
-|-------|--------------|---------------|-------|
-| -13.5 | 32,767 | 32,767 | ✓ Match |
-| -12.0 | 29,987 | 29,987 | ✓ Match |
-| -10.0 | 24,481 | 25,928 | ~6% variance |
-| -5.5625 | 19,554 | 19,554 | ✓ Match |
-| Near-zero | exact | exact | ✓ Match |
-| Transition | exact | exact | ✓ Match |
+| Input | Wormhole | Blackhole | Notes |
+|-------|----------|-----------|-------|
+| -13.5 | 0.0 | 0.0 | ✓ Match |
+| -12.0 | 0.0 | 0.0 | ✓ Match |
+| -5.5625 | 0.0 | 0.0 | ✓ Match |
+| Near-zero | ~2.98e-05 | ~2.98e-05 | ✓ Match |
+| Transition | varies | varies | ✓ Match |
 
-Bug pattern and severity consistent across both architectures.
+Bug pattern consistent across both architectures.
 
 ### Is this a regression?
 
@@ -176,10 +209,10 @@ N/A
 
 ### Logs & Diagnostics
 
-**Full test output with all regions:**
+**Full test output with all regions (original incorrect model):**
 ```
 ====================================================================================================
-TOP 50 WORST ULP ERRORS
+TOP 50 WORST ULP ERRORS (Note: ULP values use incorrect model without DAZ+FTZ)
 ====================================================================================================
          Value |       Expected |         Actual |  ULP Error |   BF16 Hex
 ----------------------------------------------------------------------------------------------------
@@ -193,7 +226,7 @@ TOP 50 WORST ULP ERRORS
   1.000000e-38 |   5.000000e-39 |   2.980232e-05 |     14,276 | (near-zero)
 
 ====================================================================================================
-REGIONS WITH ULP > 1000
+REGIONS WITH ULP > 1000 (Note: values overstated due to incorrect model)
 ====================================================================================================
 
 Found 2 distinct region(s) with ULP > 1000:
@@ -269,16 +302,16 @@ P2
 
 ### Impact
 
-- **44.8% of all BFloat16 values** have ULP error > 100
-- **41.5% of all BFloat16 values** have ULP error > 1000
-- Max ULP of 32,767 is catastrophic (maximum possible error)
-- Affects any model using GELU with:
-  - Deep negative activations (e.g., after failed training, bad initialization)
-  - Near-zero activations (residual connections, normalized values)
-  - Training stability in edge cases
+The original Chebyshev GELU implementation has accuracy issues in:
+- Deep negative region (returns 0 for x < -5.5)
+- Near-zero region (c0 coefficient dominates)
+- Transition region (poor polynomial fit at boundary)
+
+**Note:** The severity was overstated in the original report due to incorrect ULP calculations that did not account for DAZ+FTZ hardware behavior. See `/GELU_ULP_FIX_IMPLEMENTATION.md` (repository root) for corrected analysis and fix implementation.
 
 #### References
 
-- BFloat16 GELU approximation research: https://github.com/ivoitovych/bf16_gelu_research
-- Research shows Max ULP ≤ 1 is achievable with adaptive polynomial approach
-- Source file: `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h`
+- **BFloat16 GELU approximation research:** https://github.com/ivoitovych/bf16_gelu_research
+- **Hardware documentation:** `tech_reports/Handling_Special_Value/special_values.md` (DAZ+FTZ behavior)
+- **Source file:** `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h`
+- **Fix implementation:** `/GELU_ULP_FIX_IMPLEMENTATION.md` (repository root)

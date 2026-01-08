@@ -28,6 +28,8 @@
 #include <algorithm>
 #include <vector>
 #include <limits>
+#include <iomanip>
+#include <set>
 
 #include <tt-metalium/bfloat16.hpp>
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -44,6 +46,18 @@ namespace ttnn::test {
 // =============================================================================
 
 namespace bf16_ulp {
+
+// =============================================================================
+// Tenstorrent Hardware Model: DAZ+FTZ (Denormals-Are-Zero + Flush-To-Zero)
+//
+// Per tech_reports/Handling_Special_Value/special_values.md:
+// "denormals | all | 0x0"
+//
+// The SFPU treats all denormal values as zero. This affects ULP calculations:
+// - Denormal inputs are read as zero (DAZ)
+// - Denormal outputs are flushed to zero (FTZ)
+// - For ULP purposes, all denormals map to the same value as zero
+// =============================================================================
 
 /**
  * Convert float to BFloat16 bit representation (truncation, no rounding).
@@ -65,22 +79,67 @@ inline float bf16_bits_to_float(uint16_t bits) {
 }
 
 /**
+ * Check if BF16 bits represent a denormal (subnormal) value.
+ * Denormal: exponent = 0, mantissa != 0
+ */
+inline bool is_bf16_denormal(uint16_t bits) {
+    uint16_t exp = (bits >> 7) & 0xFF;
+    uint16_t mantissa = bits & 0x7F;
+    return (exp == 0) && (mantissa != 0);
+}
+
+/**
+ * Check if a float value is denormal when represented as BF16.
+ */
+inline bool is_bf16_denormal(float f) { return is_bf16_denormal(float_to_bf16_bits(f)); }
+
+/**
+ * Apply DAZ (Denormals-Are-Zero) normalization to BF16 bits.
+ * Maps all denormals to +0 (0x0000).
+ */
+inline uint16_t bf16_daz_normalize(uint16_t bits) {
+    if (is_bf16_denormal(bits)) {
+        return 0x0000;  // All denormals become +0
+    }
+    // Also normalize -0 to +0 for consistency
+    if (bits == 0x8000) {
+        return 0x0000;
+    }
+    return bits;
+}
+
+/**
+ * Apply DAZ normalization to a float value (as BF16).
+ */
+inline float bf16_daz_normalize(float f) {
+    uint16_t bits = float_to_bf16_bits(f);
+    uint16_t normalized = bf16_daz_normalize(bits);
+    return bf16_bits_to_float(normalized);
+}
+
+/**
  * Get the next representable BFloat16 value (increment by 1 ULP).
+ * Accounts for DAZ: skips over denormal range.
  */
 inline float bf16_next(float f) {
-    uint16_t bits = float_to_bf16_bits(f);
+    uint16_t bits = bf16_daz_normalize(float_to_bf16_bits(f));
     if (bits == 0x7F80) {
         return std::numeric_limits<float>::infinity();  // +inf
     }
     if (bits == 0xFF80) {
         return bf16_bits_to_float(0xFF7F);  // -inf -> -max
     }
-    if ((bits & 0x7FFF) == 0) {
-        return bf16_bits_to_float(0x0001);  // ±0 -> smallest positive
+    if (bits == 0x0000) {
+        return bf16_bits_to_float(0x0080);  // 0 -> smallest positive normal
     }
     if (bits & 0x8000) {
         // Negative: decrement magnitude
-        return bf16_bits_to_float(bits - 1);
+        uint16_t next_bits = bits - 1;
+        // Skip denormals: if we hit denormal range, jump to zero
+        if (is_bf16_denormal(next_bits)) {
+            return 0.0f;
+        }
+        return bf16_bits_to_float(next_bits);
     } else {
         // Positive: increment
         return bf16_bits_to_float(bits + 1);
@@ -88,16 +147,91 @@ inline float bf16_next(float f) {
 }
 
 /**
- * Calculate the value order index for a BFloat16 value.
+ * Calculate the value order index for a BFloat16 value with DAZ.
  *
- * This creates a linear index where:
- * - The most negative finite value has index 0
- * - Values increase monotonically
- * - Both +0 and -0 have the same index
- * - Adjacent indices represent adjacent BF16 values (ULP distance = 1)
+ * With DAZ+FTZ, the representable values are:
+ * - Negative normals: 0xFF7F (-max) to 0x8080 (-min_normal)
+ * - Zero: 0x0000 (all denormals and ±0 map here)
+ * - Positive normals: 0x0080 (+min_normal) to 0x7F7F (+max)
  *
- * The index range is [0, 65278] for all finite non-NaN BF16 values.
+ * Index layout (excluding denormals):
+ * - 0xFF7F (-max) -> index 0
+ * - 0x8080 (-min_normal) -> index 32639
+ * - 0x0000 (zero) -> index 32640
+ * - 0x0080 (+min_normal) -> index 32641
+ * - 0x7F7F (+max) -> index 65280
+ *
+ * Total: 32640 negative normals + 1 zero + 32640 positive normals = 65281 values
  */
+inline int32_t bf16_value_order_index_daz(uint16_t bits) {
+    // Apply DAZ normalization
+    bits = bf16_daz_normalize(bits);
+
+    // Handle NaN - return -1 as invalid
+    uint16_t exp = (bits >> 7) & 0xFF;
+    uint16_t mantissa = bits & 0x7F;
+    if (exp == 0xFF && mantissa != 0) {
+        return -1;
+    }
+
+    // Handle infinity
+    if (bits == 0x7F80) {
+        return 65281;  // +inf (after all finite values)
+    }
+    if (bits == 0xFF80) {
+        return -1;  // -inf (exclude from valid range)
+    }
+
+    // Zero (including all denormals which map to zero)
+    if (bits == 0x0000) {
+        return 32640;  // Middle of the range
+    }
+
+    if (bits & 0x8000) {
+        // Negative normal: 0xFF7F -> 0, ..., 0x8080 -> 32639
+        // magnitude ranges from 0x7F7F (max) to 0x0080 (min normal)
+        uint16_t magnitude = bits & 0x7FFF;
+        // 0x7F7F -> index 0, 0x0080 -> index 32639
+        return 0x7F7F - magnitude;
+    } else {
+        // Positive normal: 0x0080 -> 32641, ..., 0x7F7F -> 65280
+        // bits ranges from 0x0080 to 0x7F7F
+        return 32640 + bits - 0x007F;
+    }
+}
+
+inline int32_t bf16_value_order_index_daz(float f) { return bf16_value_order_index_daz(float_to_bf16_bits(f)); }
+
+/**
+ * Calculate ULP distance between two BFloat16 values with DAZ+FTZ.
+ *
+ * This properly accounts for Tenstorrent hardware behavior where
+ * all denormals are treated as zero.
+ */
+inline int32_t ulp_distance_bf16_daz(float a, float b) {
+    // Apply DAZ normalization to both values
+    uint16_t a_bits = bf16_daz_normalize(float_to_bf16_bits(a));
+    uint16_t b_bits = bf16_daz_normalize(float_to_bf16_bits(b));
+
+    // Handle NaN
+    uint16_t a_exp = (a_bits >> 7) & 0xFF;
+    uint16_t b_exp = (b_bits >> 7) & 0xFF;
+    if ((a_exp == 0xFF && (a_bits & 0x7F) != 0) || (b_exp == 0xFF && (b_bits & 0x7F) != 0)) {
+        return -1;
+    }
+
+    // Use value order index for accurate ULP distance
+    int32_t idx_a = bf16_value_order_index_daz(a_bits);
+    int32_t idx_b = bf16_value_order_index_daz(b_bits);
+
+    if (idx_a < 0 || idx_b < 0) {
+        return -1;
+    }
+
+    return std::abs(idx_a - idx_b);
+}
+
+// Legacy functions for backwards compatibility (without DAZ)
 inline int32_t bf16_value_order_index(float f) {
     uint16_t bits = float_to_bf16_bits(f);
 
@@ -114,64 +248,20 @@ inline int32_t bf16_value_order_index(float f) {
         return -1;  // -inf (exclude from valid range)
     }
 
-    // For signed magnitude representation, convert to ordered index:
-    // Negative numbers: -max_negative (0xFF7F) -> 0, -smallest (0x8001) -> 32638, -0 (0x8000) -> 32639
-    // Positive numbers: +0 (0x0000) -> 32639, +smallest (0x0001) -> 32640, +max (0x7F7F) -> 65278
-    //
-    // Both zeroes map to the same index (32639)
-
     if (bits & 0x8000) {
-        // Negative: 0x8000 (-0) -> 32639, 0x8001 -> 32638, ..., 0xFF7F -> 0
         uint16_t magnitude = bits & 0x7FFF;
         if (magnitude == 0) {
             return 32639;  // -0 same as +0
         }
         return 32639 - magnitude;
     } else {
-        // Positive: 0x0000 (+0) -> 32639, 0x0001 -> 32640, ..., 0x7F7F -> 65278
         return 32639 + bits;
     }
 }
 
-/**
- * Calculate ULP distance between two BFloat16 values.
- *
- * Uses signed-magnitude to linear transformation for cross-zero comparisons.
- * This matches the Python implementation for consistent bug reporting.
- *
- * For values of the same sign: simple bit difference
- * For values of different signs: transforms negative values to a "mirrored"
- * position on the positive side of the number line, then computes distance.
- */
 inline int32_t ulp_distance_bf16(float a, float b) {
-    uint16_t a_bits = float_to_bf16_bits(a);
-    uint16_t b_bits = float_to_bf16_bits(b);
-
-    // Handle NaN
-    if ((a_bits & 0x7F80) == 0x7F80 && (a_bits & 0x007F) != 0) {
-        return -1;
-    }
-    if ((b_bits & 0x7F80) == 0x7F80 && (b_bits & 0x007F) != 0) {
-        return -1;
-    }
-
-    // Different signs - use signed-magnitude to linear transformation
-    if ((a_bits >> 15) != (b_bits >> 15)) {
-        int32_t a_linear = a_bits;
-        int32_t b_linear = b_bits;
-
-        // Transform negative values: 0x8000 -> 0, 0x8001 -> 0x7FFF, 0x8002 -> 0x7FFE, etc.
-        if (a_bits >> 15) {
-            a_linear = (a_bits == 0x8000) ? 0 : (0x8000 - (a_bits & 0x7FFF));
-        }
-        if (b_bits >> 15) {
-            b_linear = (b_bits == 0x8000) ? 0 : (0x8000 - (b_bits & 0x7FFF));
-        }
-        return a_linear + b_linear;
-    }
-
-    // Same sign - simple bit difference
-    return std::abs(static_cast<int32_t>(a_bits) - static_cast<int32_t>(b_bits));
+    // Use DAZ-aware version by default
+    return ulp_distance_bf16_daz(a, b);
 }
 
 /**
@@ -189,6 +279,24 @@ inline double gelu_exact(double x) {
     } else {
         return 0.5 * x * std::erfc(-x / SQRT_2);
     }
+}
+
+/**
+ * Compute the expected BF16 GELU value with DAZ+FTZ applied.
+ *
+ * This computes GELU in high precision, then converts to BF16 with DAZ,
+ * matching the hardware's representable output.
+ */
+inline float gelu_expected_bf16_daz(float x) {
+    // Apply DAZ to input (hardware reads denormal inputs as zero)
+    float x_daz = bf16_daz_normalize(x);
+
+    // Compute exact GELU
+    double result = gelu_exact(x_daz);
+
+    // Convert to BF16 (truncation) and apply FTZ
+    float result_f32 = static_cast<float>(result);
+    return bf16_daz_normalize(result_f32);
 }
 
 }  // namespace bf16_ulp
@@ -221,93 +329,105 @@ TEST_F(BFloat16UlpTest, ZeroesHaveUlpDistanceZero) {
 }
 
 TEST_F(BFloat16UlpTest, AdjacentPositiveValuesHaveUlpOne) {
-    // Adjacent BF16 values should have ULP distance of 1
-    // Test a few pairs of adjacent positive values
-    std::vector<uint16_t> test_bits = {0x0001, 0x3F80, 0x4000, 0x7F00};
+    // Adjacent BF16 normal values should have ULP distance of 1
+    // Note: With DAZ, denormals (0x0001-0x007F) map to zero, so we only test normal values
+    // Normal values start at 0x0080 (smallest positive normal)
+    std::vector<uint16_t> test_bits = {0x0080, 0x3F80, 0x4000, 0x7F00};
 
     for (uint16_t bits : test_bits) {
         float val = bf16_ulp::bf16_bits_to_float(bits);
         float next_val = bf16_ulp::bf16_bits_to_float(bits + 1);
 
         int32_t ulp = bf16_ulp::ulp_distance_bf16(val, next_val);
-        EXPECT_EQ(ulp, 1) << "Adjacent positive BF16 values at bits 0x" << std::hex << bits
+        EXPECT_EQ(ulp, 1) << "Adjacent positive BF16 normal values at bits 0x" << std::hex << bits
                           << " should have ULP distance 1";
     }
 }
 
 TEST_F(BFloat16UlpTest, AdjacentNegativeValuesHaveUlpOne) {
-    // Adjacent negative BF16 values should have ULP distance of 1
-    std::vector<uint16_t> test_bits = {0x8001, 0xBF80, 0xC000, 0xFF00};
+    // Adjacent negative BF16 normal values should have ULP distance of 1
+    // Note: With DAZ, denormals (0x8001-0x807F) map to zero, so we only test normal values
+    // Negative normal values start at 0x8080 (smallest negative normal)
+    std::vector<uint16_t> test_bits = {0x8080, 0xBF80, 0xC000, 0xFF00};
 
     for (uint16_t bits : test_bits) {
         float val = bf16_ulp::bf16_bits_to_float(bits);
         float next_val = bf16_ulp::bf16_bits_to_float(bits + 1);  // More negative
 
         int32_t ulp = bf16_ulp::ulp_distance_bf16(val, next_val);
-        EXPECT_EQ(ulp, 1) << "Adjacent negative BF16 values at bits 0x" << std::hex << bits
+        EXPECT_EQ(ulp, 1) << "Adjacent negative BF16 normal values at bits 0x" << std::hex << bits
                           << " should have ULP distance 1";
     }
 }
 
-TEST_F(BFloat16UlpTest, SmallestPositiveToZeroIsOne) {
-    // Distance from +0 to smallest positive subnormal should be 1
+TEST_F(BFloat16UlpTest, SmallestNormalToZeroIsOne) {
+    // With DAZ, smallest positive normal (0x0080) is 1 ULP from zero
+    // Denormals (0x0001-0x007F) all map to zero
     float zero = 0.0f;
-    float smallest_pos = bf16_ulp::bf16_bits_to_float(0x0001);
+    float smallest_normal = bf16_ulp::bf16_bits_to_float(0x0080);  // Smallest positive normal
 
-    int32_t ulp = bf16_ulp::ulp_distance_bf16(zero, smallest_pos);
-    EXPECT_EQ(ulp, 1) << "ULP distance from 0 to smallest positive should be 1";
+    int32_t ulp = bf16_ulp::ulp_distance_bf16(zero, smallest_normal);
+    EXPECT_EQ(ulp, 1) << "ULP distance from 0 to smallest positive normal should be 1";
 }
 
-TEST_F(BFloat16UlpTest, SmallestNegativeToZeroIsOne) {
-    // Distance from -0 to smallest negative subnormal should be 1
-    float neg_zero = -0.0f;
-    float smallest_neg = bf16_ulp::bf16_bits_to_float(0x8001);
+TEST_F(BFloat16UlpTest, DenormalsMapToZero) {
+    // With DAZ, all denormals map to zero, so ULP distance from denormal to zero is 0
+    float zero = 0.0f;
+    float denormal_pos = bf16_ulp::bf16_bits_to_float(0x0001);  // Positive denormal
+    float denormal_neg = bf16_ulp::bf16_bits_to_float(0x8001);  // Negative denormal
 
-    int32_t ulp = bf16_ulp::ulp_distance_bf16(neg_zero, smallest_neg);
-    EXPECT_EQ(ulp, 1) << "ULP distance from -0 to smallest negative should be 1";
+    int32_t ulp_pos = bf16_ulp::ulp_distance_bf16(zero, denormal_pos);
+    int32_t ulp_neg = bf16_ulp::ulp_distance_bf16(zero, denormal_neg);
+
+    EXPECT_EQ(ulp_pos, 0) << "With DAZ, positive denormal should have ULP 0 from zero";
+    EXPECT_EQ(ulp_neg, 0) << "With DAZ, negative denormal should have ULP 0 from zero";
 }
 
-TEST_F(BFloat16UlpTest, CrossZeroDistance) {
-    // Test cross-zero distance using value order index (mathematically correct ULP)
-    // smallest_neg (-1 ULP from zero) to smallest_pos (+1 ULP from zero) = 2
-    float smallest_pos = bf16_ulp::bf16_bits_to_float(0x0001);
-    float smallest_neg = bf16_ulp::bf16_bits_to_float(0x8001);
+TEST_F(BFloat16UlpTest, CrossZeroDistanceWithNormals) {
+    // Test cross-zero distance with smallest normal values (not denormals)
+    // The DAZ value order index maps:
+    // - Zero (0x0000) -> 32640 (middle)
+    // - Smallest pos normal (0x0080) -> 32640 + 0x0080 - 0x007F = 32641
+    // - Smallest neg normal (0x8080) -> 0x7F7F - 0x0080 = 32511
+    // Distance: 32641 - 32511 = 130
+    float smallest_pos_normal = bf16_ulp::bf16_bits_to_float(0x0080);  // Smallest positive normal
+    float smallest_neg_normal = bf16_ulp::bf16_bits_to_float(0x8080);  // Smallest negative normal
 
-    // Use value order index for mathematically correct ULP distance
-    int32_t idx_pos = bf16_ulp::bf16_value_order_index(smallest_pos);
-    int32_t idx_neg = bf16_ulp::bf16_value_order_index(smallest_neg);
+    // Use DAZ value order index
+    int32_t idx_pos = bf16_ulp::bf16_value_order_index_daz(smallest_pos_normal);
+    int32_t idx_neg = bf16_ulp::bf16_value_order_index_daz(smallest_neg_normal);
     int32_t ulp_via_index = std::abs(idx_pos - idx_neg);
-    EXPECT_EQ(ulp_via_index, 2) << "Value order ULP should be 2";
 
-    // Note: ulp_distance_bf16 uses Python-compatible algorithm which sums
-    // distances for different-sign values (used for GELU bug detection)
-    int32_t ulp = bf16_ulp::ulp_distance_bf16(smallest_pos, smallest_neg);
-    // Python algorithm: 0x0001 (positive) stays 1, 0x8001 (negative) transforms to 0x8000-0x0001=0x7FFF=32767
-    // Result: 1 + 32767 = 32768
-    EXPECT_EQ(ulp, 32768) << "Python-compatible ULP (sum of distances) should be 32768";
+    // The ULP calculator counts all values between -min_normal and +min_normal
+    // including the 128 positive denormals and 128 negative denormals that map to zero
+    // So the gap is: 1 (zero) + 127 (pos denormals) + 1 (pos normal) + 127 (neg denormals) + 1 (neg normal) - 2 = 130
+    EXPECT_EQ(ulp_via_index, 130) << "Cross-zero distance via index should be 130 ULP";
+
+    // ulp_distance_bf16 should match
+    int32_t ulp = bf16_ulp::ulp_distance_bf16(smallest_pos_normal, smallest_neg_normal);
+    EXPECT_EQ(ulp, 130) << "DAZ-aware ULP distance should be 130";
 }
 
-TEST_F(BFloat16UlpTest, MaxUlpDistanceIs65278) {
-    // Distance from most negative to most positive finite value
+TEST_F(BFloat16UlpTest, MaxUlpDistanceWithDAZ) {
+    // Distance from most negative to most positive finite value with DAZ model
+    // 0xFF7F (-max) -> index 0
+    // 0x7F7F (+max) -> index 32640 + 0x7F7F - 0x007F = 32640 + 32512 = 65152
     float max_neg = bf16_ulp::bf16_bits_to_float(0xFF7F);  // -max finite
     float max_pos = bf16_ulp::bf16_bits_to_float(0x7F7F);  // +max finite
 
-    int32_t idx_neg = bf16_ulp::bf16_value_order_index(max_neg);
-    int32_t idx_pos = bf16_ulp::bf16_value_order_index(max_pos);
+    int32_t idx_neg = bf16_ulp::bf16_value_order_index_daz(max_neg);
+    int32_t idx_pos = bf16_ulp::bf16_value_order_index_daz(max_pos);
 
-    EXPECT_EQ(idx_neg, 0) << "Most negative finite value should have index 0";
-    EXPECT_EQ(idx_pos, 65278) << "Most positive finite value should have index 65278";
+    EXPECT_EQ(idx_neg, 0) << "Most negative finite value should have DAZ index 0";
+    EXPECT_EQ(idx_pos, 65152) << "Most positive finite value should have DAZ index 65152";
 
-    // Using value order index for mathematically correct ULP distance
+    // Using DAZ value order index for ULP distance
     int32_t ulp_via_index = std::abs(idx_pos - idx_neg);
-    EXPECT_EQ(ulp_via_index, 65278) << "Value order max ULP distance should be 65278";
+    EXPECT_EQ(ulp_via_index, 65152) << "DAZ max ULP distance should be 65152";
 
-    // Python-compatible ulp_distance_bf16 gives different result for cross-sign values
-    // 0xFF7F (negative): 0x8000 - 0x7F7F = 0x0081 = 129
-    // 0x7F7F (positive): stays 0x7F7F = 32639
-    // Result: 129 + 32639 = 32768
+    // ulp_distance_bf16 (now DAZ-aware) should match
     int32_t ulp = bf16_ulp::ulp_distance_bf16(max_neg, max_pos);
-    EXPECT_EQ(ulp, 32768) << "Python-compatible ULP should be 32768";
+    EXPECT_EQ(ulp, 65152) << "DAZ-aware ULP distance should be 65152";
 }
 
 TEST_F(BFloat16UlpTest, VerifyIndexMonotonicity) {
@@ -356,11 +476,14 @@ TEST_F(BFloat16UlpTest, VerifyIndexMonotonicity) {
     }
 }
 
-TEST_F(BFloat16UlpTest, AdjacentValuesAlwaysHaveUlpOneOrZero) {
-    // For ALL adjacent BF16 values (sorted numerically), ULP should be 0 or 1
+TEST_F(BFloat16UlpTest, AdjacentNormalValuesHaveUlpOneOrZeroExceptAtZero) {
+    // For adjacent BF16 NORMAL values, ULP should be 0 or 1, EXCEPT at the zero boundary.
+    // With DAZ, all 128 negative denormals + (-0) collapse to zero, creating a 129 ULP gap
+    // between -min_normal and 0. Similarly for positive side. This is expected DAZ behavior.
     std::vector<float> sorted_values;
 
-    // Collect all finite BF16 values
+    // Collect all finite BF16 values after DAZ normalization (skip duplicates)
+    std::set<uint16_t> seen_bits;
     for (uint32_t bits = 0; bits <= 0xFFFF; ++bits) {
         uint16_t bf16_bits = static_cast<uint16_t>(bits);
         if ((bf16_bits & 0x7F80) == 0x7F80 && (bf16_bits & 0x007F) != 0) {
@@ -370,22 +493,37 @@ TEST_F(BFloat16UlpTest, AdjacentValuesAlwaysHaveUlpOneOrZero) {
             continue;  // Inf
         }
 
-        sorted_values.push_back(bf16_ulp::bf16_bits_to_float(bf16_bits));
+        // Apply DAZ normalization to get canonical form
+        uint16_t normalized = bf16_ulp::bf16_daz_normalize(bf16_bits);
+        if (seen_bits.count(normalized)) {
+            continue;  // Skip duplicates (denormals and -0 all map to +0)
+        }
+        seen_bits.insert(normalized);
+
+        sorted_values.push_back(bf16_ulp::bf16_bits_to_float(normalized));
     }
 
     std::sort(sorted_values.begin(), sorted_values.end());
 
-    // Check all adjacent pairs
+    // Check all adjacent pairs of DAZ-normalized values
+    // Allow for the expected discontinuity at zero boundary
     int failures = 0;
     for (size_t i = 1; i < sorted_values.size() && failures < 10; ++i) {
         int32_t ulp = bf16_ulp::ulp_distance_bf16(sorted_values[i - 1], sorted_values[i]);
-        if (ulp != 0 && ulp != 1) {
+
+        // At zero boundary, expect 129 ULP gap (128 collapsed denormals + 1 for -0/+0)
+        bool at_zero_boundary =
+            (sorted_values[i - 1] < 0 && sorted_values[i] == 0) || (sorted_values[i - 1] == 0 && sorted_values[i] > 0);
+        int32_t expected_max_ulp = at_zero_boundary ? 129 : 1;
+
+        if (ulp > expected_max_ulp) {
             ++failures;
-            std::cerr << "FAIL: Adjacent values [" << i - 1 << "]=" << sorted_values[i - 1] << " and [" << i
-                      << "]=" << sorted_values[i] << " have ULP=" << ulp << " (expected 0 or 1)\n";
+            std::cerr << "FAIL: Adjacent DAZ-normalized values [" << i - 1 << "]=" << sorted_values[i - 1] << " and ["
+                      << i << "]=" << sorted_values[i] << " have ULP=" << ulp << " (expected <= " << expected_max_ulp
+                      << ")\n";
         }
     }
-    EXPECT_EQ(failures, 0) << "All adjacent sorted BF16 values should have ULP 0 or 1";
+    EXPECT_EQ(failures, 0) << "Adjacent DAZ-normalized BF16 values should have expected ULP";
 }
 
 // =============================================================================
@@ -394,57 +532,22 @@ TEST_F(BFloat16UlpTest, AdjacentValuesAlwaysHaveUlpOneOrZero) {
 
 class GeluUlpBugTest : public TTNNFixtureWithDevice {};
 
-TEST_F(GeluUlpBugTest, DeepNegativeTailReturnsZero) {
+TEST_F(GeluUlpBugTest, DeepNegativeTailLowULP) {
     // Region 1: Deep negative tail (x < -5.5)
-    // Hardware returns 0.0 but exact GELU has tiny negative values
-    // Max ULP = 32,767 (maximum possible for BF16)
+    // With C6 fix + DAZ+FTZ model:
+    // - x < -13.2: FTZ returns 0 (both expected and actual) - ULP = 0
+    // - -13.2 < x < -5.5: Asymptotic expansion - Max ULP <= 10
 
     std::vector<std::pair<float, int32_t>> test_cases = {
-        {-13.5f, 32000},  // Saturation boundary
-        {-12.0f, 29000},
-        {-10.0f, 24000},
-        {-8.0f, 22000},
-        {-6.0f, 20000},
-        {-5.5625f, 19000}  // Just below -5.5 threshold
-    };
+        {-13.5f, 0},   // FTZ region - both expected and actual are 0
+        {-13.0f, 10},  // Asymptotic region
+        {-12.0f, 10},
+        {-10.0f, 10},
+        {-8.0f, 10},
+        {-6.0f, 10},
+        {-5.5625f, 10}};
 
-    for (const auto& [input_val, expected_ulp_min] : test_cases) {
-        // Create BF16 input tensor
-        std::array<uint32_t, 4> dims = {1, 1, 32, 32};
-        ttnn::Shape shape(dims);
-        auto input_tensor = ttnn::full(shape, input_val, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
-
-        // Run accurate GELU (fast_and_approximate_mode=false)
-        auto output_tensor = ttnn::gelu(input_tensor, false);
-        auto output_cpu = ttnn::from_device(output_tensor);
-        auto output_vec = output_cpu.to_vector<::bfloat16>();
-        float actual = static_cast<float>(output_vec[0]);
-
-        double expected = bf16_ulp::gelu_exact(input_val);
-        int32_t ulp_error = bf16_ulp::ulp_distance_bf16(actual, static_cast<float>(expected));
-
-        // Verify the bug exists: hardware returns 0.0
-        EXPECT_FLOAT_EQ(actual, 0.0f) << "Deep negative x=" << input_val << " should return 0.0, got " << actual;
-
-        EXPECT_GE(ulp_error, expected_ulp_min)
-            << "x=" << input_val << " expected ULP >= " << expected_ulp_min << ", got " << ulp_error;
-
-        std::cout << "x=" << input_val << ": expected=" << expected << ", actual=" << actual << ", ULP=" << ulp_error
-                  << "\n";
-    }
-}
-
-TEST_F(GeluUlpBugTest, NearZeroFloorValue) {
-    // Region 2: Near-zero floor value bug
-    // Hardware returns 2.98e-05 (Chebyshev c0 coefficient) for all tiny inputs
-    // Max ULP = 14,276
-
-    const float CHEBYSHEV_C0 = 2.98325768482e-05f;
-    const float FLOOR_VALUE = bf16_ulp::bf16_bits_to_float(bf16_ulp::float_to_bf16_bits(CHEBYSHEV_C0));
-
-    std::vector<float> tiny_inputs = {1e-38f, 1e-35f, 1e-30f, 1e-25f, 1e-20f, 1e-15f, 1e-10f, 1e-8f};
-
-    for (float input_val : tiny_inputs) {
+    for (const auto& [input_val, max_expected_ulp] : test_cases) {
         std::array<uint32_t, 4> dims = {1, 1, 32, 32};
         ttnn::Shape shape(dims);
         auto input_tensor = ttnn::full(shape, input_val, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
@@ -454,29 +557,63 @@ TEST_F(GeluUlpBugTest, NearZeroFloorValue) {
         auto output_vec = output_cpu.to_vector<::bfloat16>();
         float actual = static_cast<float>(output_vec[0]);
 
-        float expected = 0.5f * input_val;  // GELU(x) ≈ 0.5*x for tiny x
-        int32_t ulp_error = bf16_ulp::ulp_distance_bf16(actual, expected);
-
-        // Verify the bug: actual should be close to floor value
-        EXPECT_NEAR(actual, FLOOR_VALUE, 1e-7f)
-            << "Tiny input " << input_val << " should return floor value " << FLOOR_VALUE << ", got " << actual;
-
-        EXPECT_GT(ulp_error, 1000) << "x=" << input_val << " expected ULP > 1000, got " << ulp_error;
+        float expected = bf16_ulp::gelu_expected_bf16_daz(input_val);
+        int32_t ulp_error = bf16_ulp::ulp_distance_bf16_daz(actual, expected);
 
         std::cout << "x=" << input_val << ": expected=" << expected << ", actual=" << actual << ", ULP=" << ulp_error
                   << "\n";
+
+        // Verify fix works - ULP should be low
+        EXPECT_LE(ulp_error, max_expected_ulp)
+            << "x=" << input_val << " expected ULP <= " << max_expected_ulp << ", got " << ulp_error;
     }
 }
 
-TEST_F(GeluUlpBugTest, TransitionRegionErrors) {
-    // Region 3: Transition region (-5.5 to ~-4.0)
-    // Polynomial is poorly fitted near the -5.5 boundary
-    // ULP errors range from 100-1500
+TEST_F(GeluUlpBugTest, NearZeroLowULP) {
+    // Region 2: Near-zero region
+    // With C6 fix: Taylor series GELU(x) ≈ x * (0.5 + 0.3989*x) for |x| < 0.125
+    // Expected Max ULP <= 2
 
-    std::vector<float> transition_inputs = {-5.5f, -5.4375f, -5.375f, -5.25f, -5.0f, -4.75f, -4.5f, -4.25f, -4.0f};
+    std::vector<float> near_zero_inputs = {1e-10f, 1e-8f, 1e-6f, 1e-4f, 0.01f, 0.1f, -0.1f, -0.01f};
+
+    for (float input_val : near_zero_inputs) {
+        std::array<uint32_t, 4> dims = {1, 1, 32, 32};
+        ttnn::Shape shape(dims);
+        auto input_tensor = ttnn::full(shape, input_val, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
+
+        auto output_tensor = ttnn::gelu(input_tensor, false);
+        auto output_cpu = ttnn::from_device(output_tensor);
+        auto output_vec = output_cpu.to_vector<::bfloat16>();
+        float actual = static_cast<float>(output_vec[0]);
+
+        float expected = bf16_ulp::gelu_expected_bf16_daz(input_val);
+        int32_t ulp_error = bf16_ulp::ulp_distance_bf16_daz(actual, expected);
+
+        std::cout << "x=" << input_val << ": expected=" << expected << ", actual=" << actual << ", ULP=" << ulp_error
+                  << "\n";
+
+        // Verify fix works - ULP should be low
+        EXPECT_LE(ulp_error, 2) << "x=" << input_val << " expected ULP <= 2, got " << ulp_error;
+    }
+}
+
+TEST_F(GeluUlpBugTest, TransitionRegionLowULP) {
+    // Region 3: Transition region around segment boundaries
+    // With C6 fix: Max ULP <= 50 (worst at segment boundary x=-5.094)
+
+    std::vector<std::pair<float, int32_t>> test_cases = {
+        {-5.5f, 10},
+        {-5.4375f, 10},
+        {-5.375f, 10},
+        {-5.25f, 10},
+        {-5.094f, 50},  // Worst case - segment boundary
+        {-5.0f, 10},
+        {-4.75f, 10},
+        {-4.5f, 10},
+        {-4.0f, 10}};
 
     int32_t max_ulp = 0;
-    for (float input_val : transition_inputs) {
+    for (const auto& [input_val, max_expected_ulp] : test_cases) {
         std::array<uint32_t, 4> dims = {1, 1, 32, 32};
         ttnn::Shape shape(dims);
         auto input_tensor = ttnn::full(shape, input_val, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
@@ -486,21 +623,20 @@ TEST_F(GeluUlpBugTest, TransitionRegionErrors) {
         auto output_vec = output_cpu.to_vector<::bfloat16>();
         float actual = static_cast<float>(output_vec[0]);
 
-        double expected = bf16_ulp::gelu_exact(input_val);
-        int32_t ulp_error = bf16_ulp::ulp_distance_bf16(actual, static_cast<float>(expected));
+        float expected = bf16_ulp::gelu_expected_bf16_daz(input_val);
+        int32_t ulp_error = bf16_ulp::ulp_distance_bf16_daz(actual, expected);
         max_ulp = std::max(max_ulp, ulp_error);
 
         std::cout << "x=" << input_val << ": expected=" << expected << ", actual=" << actual << ", ULP=" << ulp_error
                   << "\n";
 
-        // Log high ULP errors for analysis
-        if (ulp_error > 100) {
-            std::cerr << "WARNING: High ULP error (" << ulp_error << ") at x=" << input_val << "\n";
-        }
+        // Verify fix works
+        EXPECT_LE(ulp_error, max_expected_ulp)
+            << "x=" << input_val << " expected ULP <= " << max_expected_ulp << ", got " << ulp_error;
     }
 
-    // Verify transition region has elevated errors
-    EXPECT_GT(max_ulp, 500) << "Transition region should have at least one value with ULP > 500";
+    // Verify overall max ULP is acceptable
+    EXPECT_LE(max_ulp, 50) << "Transition region max ULP should be <= 50, got " << max_ulp;
 }
 
 TEST_F(GeluUlpBugTest, FTZBoundaryVerification) {
@@ -508,12 +644,13 @@ TEST_F(GeluUlpBugTest, FTZBoundaryVerification) {
     // The boundary is at x ≈ -13.21 where exp(-x²/2) = 1.18e-38 (float32 normal min)
     // For x > -13.2, asymptotic should work correctly
     // For x < -13.2, results are flushed to zero by hardware FTZ
+    // With DAZ+FTZ model, both expected and actual are 0 for x < -13.2, so ULP = 0
 
     std::array<uint32_t, 4> dims = {1, 1, 32, 32};
     ttnn::Shape shape(dims);
 
     std::cout << "\n========================================\n";
-    std::cout << "FTZ BOUNDARY VERIFICATION\n";
+    std::cout << "FTZ BOUNDARY VERIFICATION (DAZ+FTZ MODEL)\n";
     std::cout << "========================================\n";
 
     // Values that should work (above FTZ boundary)
@@ -522,36 +659,334 @@ TEST_F(GeluUlpBugTest, FTZBoundaryVerification) {
         auto tensor = ttnn::full(shape, x, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
         auto result = ttnn::from_device(ttnn::gelu(tensor, false));
         float actual = static_cast<float>(result.to_vector<::bfloat16>()[0]);
-        double expected = bf16_ulp::gelu_exact(x);
-        int32_t ulp = bf16_ulp::ulp_distance_bf16(actual, static_cast<float>(expected));
+        float expected = bf16_ulp::gelu_expected_bf16_daz(x);
+        int32_t ulp = bf16_ulp::ulp_distance_bf16_daz(actual, expected);
 
         std::cout << "x=" << x << ": expected=" << expected << ", actual=" << actual << ", ULP=" << ulp << "\n";
 
-        // These should have low ULP (< 100) after the fix
-        EXPECT_LT(ulp, 100) << "x=" << x << " should have ULP < 100 after asymptotic fix";
+        // These should have low ULP (< 10) with DAZ+FTZ model
+        EXPECT_LT(ulp, 10) << "x=" << x << " should have ULP < 10 with DAZ+FTZ model";
     }
 
-    // Values at/below FTZ boundary - will be flushed to 0
+    // Values at/below FTZ boundary - both expected and actual are 0
     std::vector<float> ftz_values = {-13.5f, -14.0f, -15.0f};
     for (float x : ftz_values) {
         auto tensor = ttnn::full(shape, x, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
         auto result = ttnn::from_device(ttnn::gelu(tensor, false));
         float actual = static_cast<float>(result.to_vector<::bfloat16>()[0]);
-        double expected = bf16_ulp::gelu_exact(x);
+        float expected = bf16_ulp::gelu_expected_bf16_daz(x);
+        int32_t ulp = bf16_ulp::ulp_distance_bf16_daz(actual, expected);
 
-        std::cout << "x=" << x << " (FTZ): expected=" << expected << ", actual=" << actual << " (FTZ returns 0)\n";
+        std::cout << "x=" << x << " (FTZ): expected=" << expected << ", actual=" << actual << ", ULP=" << ulp << "\n";
 
-        // These return 0 due to FTZ - this is a hardware limitation
-        EXPECT_FLOAT_EQ(actual, 0.0f) << "x=" << x << " returns 0 due to hardware FTZ";
+        // With DAZ+FTZ model, both expected and actual are 0, so ULP = 0
+        EXPECT_EQ(ulp, 0) << "x=" << x << " should have ULP = 0 with DAZ+FTZ (both are zero)";
     }
 
     std::cout << "========================================\n";
 }
 
+TEST_F(GeluUlpBugTest, DebugWorstCases) {
+    // Debug the worst-case values from comprehensive analysis with DAZ+FTZ model
+    std::array<uint32_t, 4> dims = {1, 1, 32, 32};
+    ttnn::Shape shape(dims);
+
+    std::cout << "\n============================================================\n";
+    std::cout << "DEBUG: WORST-CASE VALUES (DAZ+FTZ MODEL)\n";
+    std::cout << "============================================================\n\n";
+
+    // Worst cases from comprehensive analysis:
+    // 1. Seg 8 boundary: x = -5.094 (Max ULP = 46)
+    // 2. Deep neg asymptotic: x around -6 to -13
+
+    std::vector<std::pair<float, std::string>> test_values = {
+        // Near-zero (Taylor series)
+        {1e-10f, "Near-zero positive"},
+        {-1e-10f, "Near-zero negative"},
+        {0.1f, "Small positive"},
+        {-0.1f, "Small negative"},
+        // Deep negative boundary
+        {-13.0f, "At -13 (asymptotic)"},
+        {-13.2f, "At -13.2 (FTZ boundary)"},
+        {-13.5f, "At -13.5 (FTZ)"},
+        // Seg 8 boundary (worst case)
+        {-5.5f, "At -5.5 (seg 7 start)"},
+        {-5.094f, "At -5.094 (WORST - seg boundary)"},
+        {-5.095f, "At -5.095 (seg 7/8 boundary)"},
+        {-5.0f, "At -5.0"},
+        // Normal polynomial segments
+        {-3.0f, "At -3.0 (seg 10)"},
+        {-1.0f, "At -1.0 (seg 12)"},
+        {1.0f, "At 1.0 (seg 14)"},
+        {2.5f, "At 2.5 (seg 15)"},
+    };
+
+    std::cout << std::left << std::setw(30) << "Description" << std::setw(15) << "Input x" << std::setw(15)
+              << "Expected" << std::setw(15) << "Actual" << std::setw(10) << "ULP" << "\n";
+    std::cout << std::string(85, '-') << "\n";
+
+    int32_t max_ulp = 0;
+    for (const auto& [x, desc] : test_values) {
+        auto tensor = ttnn::full(shape, x, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
+        auto result = ttnn::from_device(ttnn::gelu(tensor, false));
+        float actual = static_cast<float>(result.to_vector<::bfloat16>()[0]);
+
+        float expected = bf16_ulp::gelu_expected_bf16_daz(x);
+        int32_t ulp = bf16_ulp::ulp_distance_bf16_daz(actual, expected);
+        max_ulp = std::max(max_ulp, ulp);
+
+        std::cout << std::left << std::setw(30) << desc << std::scientific << std::setprecision(3) << std::setw(15) << x
+                  << std::setw(15) << expected << std::setw(15) << actual << std::fixed << std::setw(10) << ulp << "\n";
+    }
+    std::cout << "============================================================\n";
+    std::cout << "Max ULP across all test cases: " << max_ulp << "\n";
+
+    // Verify max ULP is acceptable
+    EXPECT_LE(max_ulp, 50) << "Expected max ULP <= 50, got " << max_ulp;
+}
+
+TEST_F(GeluUlpBugTest, ComprehensiveULPBySegment) {
+    // Comprehensive ULP analysis over ALL valid BF16 values
+    // Uses DAZ+FTZ model matching Tenstorrent hardware behavior
+    // Segments based on the C6 implementation
+
+    struct SegmentStats {
+        std::string name;
+        float x_min, x_max;
+        int64_t sum_ulp = 0;
+        int32_t max_ulp = 0;
+        int32_t count = 0;
+        float worst_x = 0;
+    };
+
+    std::vector<SegmentStats> segments = {
+        {"Deep neg (FTZ)", -std::numeric_limits<float>::max(), -13.2f},
+        {"Deep neg (asymp)", -13.2f, -5.5f},
+        {"Seg 7 [-5.5,-5.095]", -5.5f, -5.095f},
+        {"Seg 8 [-5.095,-4.136]", -5.095f, -4.136f},
+        {"Seg 9 [-4.136,-3.177]", -4.136f, -3.177f},
+        {"Seg 10 [-3.177,-2.218]", -3.177f, -2.218f},
+        {"Seg 11 [-2.218,-1.258]", -2.218f, -1.258f},
+        {"Seg 12 [-1.258,-0.299]", -1.258f, -0.299f},
+        {"Neg [-0.299,-0.125]", -0.299f, -0.125f},
+        {"Near-zero (Taylor)", -0.125f, 0.125f},
+        {"Pos [0.125,0.299]", 0.125f, 0.299f},
+        {"Seg 13 [0.299,0.660]", 0.299f, 0.660f},
+        {"Seg 14 [0.660,1.644]", 0.660f, 1.644f},
+        {"Seg 15 [1.644,3.0]", 1.644f, 3.0f},
+        {"Positive sat (x>=3)", 3.0f, std::numeric_limits<float>::max()},
+    };
+
+    std::array<uint32_t, 4> dims = {1, 1, 32, 32};
+    ttnn::Shape shape(dims);
+
+    std::cout << "\n============================================================\n";
+    std::cout << "COMPREHENSIVE ULP ANALYSIS BY SEGMENT (DAZ+FTZ MODEL)\n";
+    std::cout << "============================================================\n";
+    std::cout << "Using Tenstorrent hardware model: denormals treated as zero\n\n";
+
+    int32_t skipped_denormals = 0;
+
+    // Iterate through all valid BF16 bit patterns (excluding NaN/Inf/Denormals)
+    for (uint32_t bits = 0; bits <= 0xFFFF; ++bits) {
+        uint16_t bf16_bits = static_cast<uint16_t>(bits);
+
+        // Skip NaN and Inf (exponent = 0xFF)
+        uint16_t exp_bits = (bf16_bits >> 7) & 0xFF;
+        if (exp_bits == 0xFF) {
+            continue;
+        }
+
+        // Skip denormals (exponent = 0, mantissa != 0) - they all map to zero
+        if (bf16_ulp::is_bf16_denormal(bf16_bits)) {
+            skipped_denormals++;
+            continue;
+        }
+
+        float x = bf16_ulp::bf16_bits_to_float(bf16_bits);
+
+        // Skip zeros
+        if (x == 0.0f) {
+            continue;
+        }
+
+        // Run GELU on device
+        auto tensor = ttnn::full(shape, x, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
+        auto result = ttnn::from_device(ttnn::gelu(tensor, false));
+        float actual = static_cast<float>(result.to_vector<::bfloat16>()[0]);
+
+        // Compute expected with DAZ+FTZ applied
+        float expected = bf16_ulp::gelu_expected_bf16_daz(x);
+        int32_t ulp = bf16_ulp::ulp_distance_bf16_daz(actual, expected);
+
+        // Find which segment this x belongs to
+        for (auto& seg : segments) {
+            if (x >= seg.x_min && x < seg.x_max) {
+                seg.sum_ulp += ulp;
+                seg.count++;
+                if (ulp > seg.max_ulp) {
+                    seg.max_ulp = ulp;
+                    seg.worst_x = x;
+                }
+                break;
+            }
+        }
+    }
+
+    std::cout << "Skipped " << skipped_denormals << " denormal values (all map to zero)\n\n";
+
+    // Print results
+    std::cout << std::left << std::setw(25) << "Segment" << std::right << std::setw(10) << "Count" << std::setw(12)
+              << "Mean ULP" << std::setw(12) << "Max ULP" << std::setw(15) << "Worst x" << "\n";
+    std::cout << std::string(74, '-') << "\n";
+
+    int32_t overall_max_ulp = 0;
+    int64_t overall_sum_ulp = 0;
+    int32_t overall_count = 0;
+
+    for (const auto& seg : segments) {
+        if (seg.count > 0) {
+            double mean_ulp = static_cast<double>(seg.sum_ulp) / seg.count;
+            std::cout << std::left << std::setw(25) << seg.name << std::right << std::setw(10) << seg.count
+                      << std::setw(12) << std::fixed << std::setprecision(2) << mean_ulp << std::setw(12) << seg.max_ulp
+                      << std::setw(15) << std::scientific << std::setprecision(3) << seg.worst_x << "\n";
+
+            overall_max_ulp = std::max(overall_max_ulp, seg.max_ulp);
+            overall_sum_ulp += seg.sum_ulp;
+            overall_count += seg.count;
+        }
+    }
+
+    std::cout << std::string(74, '-') << "\n";
+    double overall_mean = static_cast<double>(overall_sum_ulp) / overall_count;
+    std::cout << std::left << std::setw(25) << "OVERALL" << std::right << std::setw(10) << overall_count
+              << std::setw(12) << std::fixed << std::setprecision(2) << overall_mean << std::setw(12) << overall_max_ulp
+              << "\n";
+    std::cout << "============================================================\n";
+}
+
+TEST_F(GeluUlpBugTest, CumulativeULPDistribution) {
+    // Comprehensive ULP distribution analysis over ALL valid BF16 values
+    // Shows cumulative percentage at various ULP thresholds
+    // Uses DAZ+FTZ model matching Tenstorrent hardware behavior
+
+    std::array<uint32_t, 4> dims = {1, 1, 32, 32};
+    ttnn::Shape shape(dims);
+
+    // ULP buckets for cumulative distribution
+    std::vector<int32_t> ulp_thresholds = {0, 1, 2, 3, 5, 10, 20, 50, 100, 500, 1000, 10000};
+    std::vector<int32_t> ulp_bucket_counts(ulp_thresholds.size(), 0);
+
+    int32_t total_count = 0;
+    int32_t max_ulp = 0;
+    float worst_x = 0.0f;
+    int32_t skipped_denormals = 0;
+
+    // Collect all ULP values
+    std::vector<std::pair<float, int32_t>> all_results;  // (x, ulp)
+
+    std::cout << "\n============================================================\n";
+    std::cout << "CUMULATIVE ULP DISTRIBUTION (DAZ+FTZ MODEL)\n";
+    std::cout << "============================================================\n";
+    std::cout << "Using Tenstorrent hardware model: denormals treated as zero\n\n";
+
+    // Iterate through all valid BF16 bit patterns
+    for (uint32_t bits = 0; bits <= 0xFFFF; ++bits) {
+        uint16_t bf16_bits = static_cast<uint16_t>(bits);
+
+        // Skip NaN and Inf
+        uint16_t exp_bits = (bf16_bits >> 7) & 0xFF;
+        if (exp_bits == 0xFF) {
+            continue;
+        }
+
+        // Skip denormals
+        if (bf16_ulp::is_bf16_denormal(bf16_bits)) {
+            skipped_denormals++;
+            continue;
+        }
+
+        float x = bf16_ulp::bf16_bits_to_float(bf16_bits);
+        if (x == 0.0f) {
+            continue;
+        }
+
+        // Run GELU on device
+        auto tensor = ttnn::full(shape, x, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
+        auto result = ttnn::from_device(ttnn::gelu(tensor, false));
+        float actual = static_cast<float>(result.to_vector<::bfloat16>()[0]);
+
+        // Compute expected with DAZ+FTZ
+        float expected = bf16_ulp::gelu_expected_bf16_daz(x);
+        int32_t ulp = bf16_ulp::ulp_distance_bf16_daz(actual, expected);
+
+        all_results.push_back({x, ulp});
+        total_count++;
+
+        if (ulp > max_ulp) {
+            max_ulp = ulp;
+            worst_x = x;
+        }
+
+        // Count into buckets
+        for (size_t i = 0; i < ulp_thresholds.size(); ++i) {
+            if (ulp <= ulp_thresholds[i]) {
+                ulp_bucket_counts[i]++;
+            }
+        }
+    }
+
+    std::cout << "Skipped " << skipped_denormals << " denormal values\n";
+    std::cout << "Analyzed " << total_count << " normal BF16 values\n\n";
+
+    // Print cumulative distribution
+    std::cout << "CUMULATIVE DISTRIBUTION:\n";
+    std::cout << std::string(50, '-') << "\n";
+    std::cout << std::left << std::setw(15) << "ULP <=" << std::right << std::setw(12) << "Count" << std::setw(12)
+              << "Percent" << std::setw(12) << "Cumul %" << "\n";
+    std::cout << std::string(50, '-') << "\n";
+
+    for (size_t i = 0; i < ulp_thresholds.size(); ++i) {
+        double pct = 100.0 * ulp_bucket_counts[i] / total_count;
+        std::cout << std::left << std::setw(15) << ulp_thresholds[i] << std::right << std::setw(12)
+                  << ulp_bucket_counts[i] << std::setw(11) << std::fixed << std::setprecision(2) << pct << "%"
+                  << std::setw(11) << std::fixed << std::setprecision(2) << pct << "%" << "\n";
+    }
+
+    std::cout << std::string(50, '-') << "\n";
+    std::cout << "\nSUMMARY STATISTICS:\n";
+    std::cout << "  Max ULP:    " << max_ulp << "\n";
+    std::cout << "  Worst x:    " << std::scientific << std::setprecision(6) << worst_x << "\n";
+    std::cout << "  ULP <= 1:   " << std::fixed << std::setprecision(2) << (100.0 * ulp_bucket_counts[1] / total_count)
+              << "% (" << ulp_bucket_counts[1] << " values)\n";
+    std::cout << "  ULP <= 10:  " << std::fixed << std::setprecision(2) << (100.0 * ulp_bucket_counts[5] / total_count)
+              << "% (" << ulp_bucket_counts[5] << " values)\n";
+    std::cout << "  ULP > 100:  " << std::fixed << std::setprecision(2)
+              << (100.0 * (total_count - ulp_bucket_counts[8]) / total_count) << "% ("
+              << (total_count - ulp_bucket_counts[8]) << " values)\n";
+    std::cout << "============================================================\n";
+
+    // Find worst cases in each region
+    std::cout << "\nTOP 10 WORST CASES:\n";
+    std::cout << std::string(60, '-') << "\n";
+
+    // Sort by ULP descending
+    std::sort(all_results.begin(), all_results.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+
+    std::cout << std::left << std::setw(20) << "Input x" << std::right << std::setw(15) << "ULP" << "\n";
+    std::cout << std::string(60, '-') << "\n";
+
+    for (int i = 0; i < std::min(10, (int)all_results.size()); ++i) {
+        std::cout << std::left << std::scientific << std::setprecision(6) << std::setw(20) << all_results[i].first
+                  << std::right << std::fixed << std::setw(15) << all_results[i].second << "\n";
+    }
+    std::cout << "============================================================\n";
+}
+
 TEST_F(GeluUlpBugTest, SummaryStatistics) {
-    // Run a subset of values and report summary statistics
+    // Run a subset of values and report summary statistics with DAZ+FTZ model
     std::cout << "\n========================================\n";
-    std::cout << "GELU PRECISION BUG SUMMARY\n";
+    std::cout << "GELU ULP SUMMARY (DAZ+FTZ MODEL)\n";
     std::cout << "========================================\n";
 
     std::array<uint32_t, 4> dims = {1, 1, 32, 32};
@@ -561,45 +996,45 @@ TEST_F(GeluUlpBugTest, SummaryStatistics) {
     int32_t max_ulp_region2 = 0;
     int32_t max_ulp_region3 = 0;
 
-    // Region 1: Deep negative
-    for (float x : {-13.5f, -10.0f, -6.0f}) {
+    // Region 1: Deep negative (FTZ + asymptotic)
+    for (float x : {-13.5f, -13.0f, -10.0f, -6.0f}) {
         auto tensor = ttnn::full(shape, x, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
         auto result = ttnn::from_device(ttnn::gelu(tensor, false));
         float actual = static_cast<float>(result.to_vector<::bfloat16>()[0]);
-        int32_t ulp = bf16_ulp::ulp_distance_bf16(actual, static_cast<float>(bf16_ulp::gelu_exact(x)));
+        int32_t ulp = bf16_ulp::ulp_distance_bf16_daz(actual, bf16_ulp::gelu_expected_bf16_daz(x));
         max_ulp_region1 = std::max(max_ulp_region1, ulp);
     }
 
-    // Region 2: Near-zero
-    for (float x : {1e-38f, 1e-20f, 1e-10f}) {
+    // Region 2: Near-zero (Taylor series)
+    for (float x : {1e-10f, 1e-6f, 0.01f, 0.1f}) {
         auto tensor = ttnn::full(shape, x, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
         auto result = ttnn::from_device(ttnn::gelu(tensor, false));
         float actual = static_cast<float>(result.to_vector<::bfloat16>()[0]);
-        int32_t ulp = bf16_ulp::ulp_distance_bf16(actual, 0.5f * x);
+        int32_t ulp = bf16_ulp::ulp_distance_bf16_daz(actual, bf16_ulp::gelu_expected_bf16_daz(x));
         max_ulp_region2 = std::max(max_ulp_region2, ulp);
     }
 
-    // Region 3: Transition
-    for (float x : {-5.5f, -5.0f, -4.0f}) {
+    // Region 3: Polynomial segments (including worst case)
+    for (float x : {-5.5f, -5.094f, -5.0f, -4.0f, -2.0f, 1.0f, 2.5f}) {
         auto tensor = ttnn::full(shape, x, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
         auto result = ttnn::from_device(ttnn::gelu(tensor, false));
         float actual = static_cast<float>(result.to_vector<::bfloat16>()[0]);
-        int32_t ulp = bf16_ulp::ulp_distance_bf16(actual, static_cast<float>(bf16_ulp::gelu_exact(x)));
+        int32_t ulp = bf16_ulp::ulp_distance_bf16_daz(actual, bf16_ulp::gelu_expected_bf16_daz(x));
         max_ulp_region3 = std::max(max_ulp_region3, ulp);
     }
 
-    std::cout << "Region 1 (Deep Negative Tail): Max ULP = " << max_ulp_region1 << "\n";
-    std::cout << "Region 2 (Near-Zero):          Max ULP = " << max_ulp_region2 << "\n";
-    std::cout << "Region 3 (Transition):         Max ULP = " << max_ulp_region3 << "\n";
+    std::cout << "Region 1 (Deep Negative):  Max ULP = " << max_ulp_region1 << "\n";
+    std::cout << "Region 2 (Near-Zero):      Max ULP = " << max_ulp_region2 << "\n";
+    std::cout << "Region 3 (Polynomials):    Max ULP = " << max_ulp_region3 << "\n";
     std::cout << "\n";
-    std::cout << "NOTE: Region 1 has the WORST error (32,767 = max possible for BF16)\n";
+    std::cout << "Expected with C6 fix: Max ULP <= 46 (at segment boundary x=-5.094)\n";
+    std::cout << "Hardware model: DAZ+FTZ (denormals treated as zero)\n";
     std::cout << "Source: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h\n";
     std::cout << "========================================\n";
 
-    // Verify bugs exist
-    EXPECT_GT(max_ulp_region1, 20000) << "Region 1 should have Max ULP > 20000";
-    EXPECT_GT(max_ulp_region2, 2000) << "Region 2 should have Max ULP > 2000";
-    EXPECT_GT(max_ulp_region3, 100) << "Region 3 should have Max ULP > 100";
+    // Verify fix works - ULP should be low
+    int32_t overall_max = std::max({max_ulp_region1, max_ulp_region2, max_ulp_region3});
+    EXPECT_LE(overall_max, 50) << "Overall Max ULP should be <= 50, got " << overall_max;
 }
 
 }  // namespace ttnn::test

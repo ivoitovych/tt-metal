@@ -13,7 +13,7 @@ namespace ckernel {
 namespace sfpu {
 
 // C6 Adaptive Polynomial GELU Implementation
-// Achieves Max ULP = 1 across entire BF16 range
+// Achieves Max ULP = 46 across entire BF16 range (DAZ+FTZ model)
 // Reference: https://github.com/ivoitovych/bf16_gelu_research
 
 // Degree-4 polynomial evaluation: c0 + c1*u + c2*u² + c3*u³ + c4*u⁴
@@ -36,7 +36,7 @@ inline sfpi::vFloat calculate_gelu_c6(sfpi::vFloat val) {
     v_if(abs_val < 0.125f) { result = val * (0.5f + INV_SQRT_2PI * val); }
     // Region 2: Positive saturation (x >= 3.0)
     v_elseif(val >= 3.0f) { result = val; }
-    // Region 3: Deep negative - asymptotic expansion for -13.2 < x < -5.5
+    // Region 3: Deep negative - asymptotic expansion for x < -5.5
     // GELU(x) ≈ -φ(x) where φ(x) = exp(-x²/2) / √(2π)
     //
     // Hardware limitations:
@@ -45,8 +45,12 @@ inline sfpi::vFloat calculate_gelu_c6(sfpi::vFloat val) {
     // 3. exp(-87.34) = 1.18e-38 is the denormal boundary in float32
     // 4. For x < -13.2, -x²/2 < -87.12 produces denormals that get flushed
     //
-    // GELU(-13.2) ≈ 7e-39, which is the smallest value we can compute accurately.
-    // For x < -13.2: GELU rounds to 0 due to hardware FTZ. This is unavoidable.
+    // NOTE: Research polynomial segments 4-6 don't work in float32 SFPU due to
+    // precision loss with very small coefficients (1e-18 to 1e-10). The asymptotic
+    // expansion provides better accuracy than polynomials for this range.
+    //
+    // For -13.2 < x < -5.5: Asymptotic expansion works reasonably well
+    // For x < -13.2: FTZ forces result to 0 (unavoidable hardware limitation)
     v_elseif(val < -5.5f) {
         v_if(val < -13.2f) {
             // Below practical precision - exp produces denormals, FTZ flushes to 0
@@ -62,10 +66,10 @@ inline sfpi::vFloat calculate_gelu_c6(sfpi::vFloat val) {
         v_endif;
     }
     // Region 4: C6 adaptive polynomial segments [-5.5, 3.0]
+    // Segments 7-15 from C6 research cover this range with good accuracy
     v_else {
-        // Segments 7-15 from C6 research
+        // Segment 7: [-5.5, -5.095]
         v_if(val < -5.095f) {
-            // Segment 7: [-5.5, -5.095]
             sfpi::vFloat u = (val - sfpi::vFloat(-5.5745f)) * sfpi::vFloat(1.0f / 0.4796f);
             result = POLY4(-7.138e-08f, -1.697e-07f, -2.284e-07f, -2.645e-07f, -1.465e-07f, u);
         }
