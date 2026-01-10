@@ -2,37 +2,39 @@
 
 **GitHub Issue:** https://github.com/tenstorrent/tt-metal/issues/35290
 
-**Branch:** `ivoitovych/issue-35290-gelu-ulp-fix`
+**Branch:** `ivoitovych/issue-35290-gelu-ulp-fix-03`
 
 **Base Commit:** `50b633663b48e5dabc2f9ddc32ceb28c0a11c873`
 
-**Status:** IMPLEMENTED AND VERIFIED
+**Status:** IMPLEMENTED AND VERIFIED (v3)
 
 ---
 
 ## Summary
 
-The C6 Adaptive Polynomial GELU implementation achieves **Max ULP = 11** across the entire BF16 range
-when measured with the correct DAZ+FTZ (Denormals-Are-Zero + Flush-To-Zero) hardware model.
+The GELU implementation achieves **Max ULP = 7** across the entire BF16 range using high-precision
+raw x polynomial segments. All polynomial segments now achieve **Max ULP = 1**; the only remaining
+ULP > 1 is in the asymptotic region (exp() approximation error).
 
 ### Key Results (DAZ+FTZ Model)
 
 | Metric | Value |
 |--------|-------|
-| **Max ULP** | 11 (at x = -4.188, asymptotic/polynomial boundary) |
-| **Mean ULP** | 0.02 |
-| **ULP ≤ 1** | 99.67% of values |
+| **Max ULP** | 7 (at x = -5.969, asymptotic region) |
+| **Mean ULP** | 0.01 |
+| **ULP ≤ 1** | 99.80% of values |
 | **ULP > 100** | 0% of values |
+| **Polynomial regions** | All have Max ULP = 1 |
 
 ### Per-Segment ULP Analysis
 
 | Segment | Range | Count | Mean ULP | Max ULP | Worst x |
 |---------|-------|------:|----------:|--------:|--------:|
 | Deep neg (FTZ) | x < -13.2 | 15,916 | 0.00 | 0 | N/A |
-| Deep neg (asymp) | [-13.2, -5.5] | 163 | 2.78 | 7 | -5.969 |
-| Asymp ext | [-5.5, -5.095] | 13 | 6.15 | 8 | -5.125 |
-| Asymp ext | [-5.095, -4.136] | 31 | 7.90 | **11** | -4.188 |
-| Seg 9 | [-4.136, -3.177] | 57 | 0.39 | 3 | -4.125 |
+| Deep neg (asymp) | [-13.2, -5.5] | 163 | 2.78 | **7** | **-5.969** |
+| Range A | [-5.5, -5.095] | 13 | 0.46 | 1 | -5.125 |
+| Range B | [-5.095, -4.136] | 31 | 0.26 | 1 | -4.156 |
+| Range C | [-4.136, -3.177] | 57 | 0.16 | 1 | -3.188 |
 | Seg 10 | [-3.177, -2.218] | 62 | 0.05 | 1 | -2.984 |
 | Seg 11 | [-2.218, -1.258] | 108 | 0.03 | 1 | -1.852 |
 | Seg 12 | [-1.258, -0.299] | 264 | 0.02 | 1 | -0.508 |
@@ -43,17 +45,26 @@ when measured with the correct DAZ+FTZ (Denormals-Are-Zero + Flush-To-Zero) hard
 | Seg 14 | [0.660, 1.644] | 170 | 0.01 | 1 | 0.852 |
 | Seg 15 | [1.644, 3.0] | 109 | 0.04 | 1 | 1.680 |
 | Positive sat | x >= 3.0 | 16,192 | 0.01 | 1 | 3.000 |
-| **OVERALL** | | **65,024** | **0.02** | **11** | |
+| **OVERALL** | | **65,024** | **0.01** | **7** | |
 
 ### Cumulative Distribution
 
 | ULP ≤ | Count | Percent |
 |------:|------:|--------:|
-| 0 | 64,593 | 99.34% |
-| 1 | 64,858 | 99.74% |
-| 3 | 64,948 | 99.88% |
-| 7 | 64,990 | 99.95% |
-| 11 | 65,024 | 100.00% |
+| 0 | 64,621 | 99.38% |
+| 1 | 64,897 | 99.80% |
+| 2 | 64,940 | 99.87% |
+| 3 | 64,974 | 99.92% |
+| 5 | 65,016 | 99.99% |
+| 7 | 65,024 | 100.00% |
+
+### Version History
+
+| Version | Branch | Max ULP | Key Change |
+|---------|--------|---------|------------|
+| v1 | -gelu-ulp-fix | 46 | Initial C6 implementation |
+| v2 | -gelu-ulp-fix-02 | 11 | Extended asymptotic to -4.136 |
+| **v3** | **-gelu-ulp-fix-03** | **7** | Raw x polynomials for [-5.5, -3.177] |
 
 ### Hardware Model Correction
 
@@ -224,17 +235,21 @@ v_if(val >= -13.5f) {
 v_endif;
 ```
 
-### Fix 3: Adaptive Polynomial (Best Accuracy) ✅ IMPLEMENTED
+### Fix 3: Adaptive Polynomial (Best Accuracy) ✅ IMPLEMENTED (v3)
 
-Replace single Chebyshev with segmented adaptive polynomial:
+Replace single Chebyshev with segmented adaptive polynomial using raw x evaluation:
 
 ```cpp
-// 7 segments with optimized coefficients (C6 segments 9-15)
-// Extended asymptotic expansion covers [-13.2, -4.136]
+// 8 new high-precision segments using raw x (not normalized u):
+// Range A: 4 segments for [-5.5, -5.095], Max ULP = 0-1
+// Range B: 2 segments for [-5.095, -4.136], Max ULP = 1
+// Range C: 2 segments for [-4.136, -3.177], Max ULP = 1
+// Original C6 segments 10-15 for [-3.177, 3.0], Max ULP = 1
+// Asymptotic expansion covers [-13.2, -5.5], Max ULP = 7
 // See: https://github.com/ivoitovych/bf16_gelu_research/blob/main/adaptive_poly.cpp
 ```
 
-**Result:** Max ULP = 11 (extended asymptotic approach outperforms polynomial segments 7-8)
+**Result:** Max ULP = 7 (all polynomial segments have Max ULP = 1)
 
 ### Fix 4: Asymptotic Tail Expansion
 
@@ -260,11 +275,11 @@ For large negative x, use asymptotic formula instead of returning 0:
 
 ### Phase 3: Polynomial Refit (Region 3)
 - [x] Evaluate if transition region errors are acceptable
-- [x] Implemented C6 adaptive polynomial with 9 segments
+- [x] Implemented C6 adaptive polynomial with 14 segments (8 raw x + 6 normalized u)
 
 ### Phase 4: Validation
 - [x] Run full BF16 sweep (65,024 non-denormal values)
-- [x] Verify Max ULP is acceptable: **Max ULP = 11** (at asymptotic/polynomial boundary)
+- [x] Verify Max ULP is acceptable: **Max ULP = 7** (at x = -5.969 in asymptotic region)
 - [x] Run existing GELU tests to ensure no regression
 
 ### Phase 5: PR Preparation
@@ -397,6 +412,35 @@ x=3.0:     Max ULP = 1 (identity function region)
 - `DenormalInputsProduceSameOutputAsZero` - Verifies DAZ behavior (254 inputs)
 
 **Test Suite:** 21 C++ tests + 27 Python tests = 48 total tests
+
+### 2026-01-10: Raw x Polynomial Segments (v3)
+
+**Problem:** v2 still had Max ULP = 11 at the asymptotic/polynomial boundary (x = -4.188). The polynomial segments 7-8 were eliminated in v2, but the asymptotic expansion had limited accuracy near -4.136.
+
+**Solution:** Added 8 new high-precision polynomial segments using **raw x evaluation** (not normalized `u = (x - mid) / scale`):
+- Range A: 4 segments for [-5.5, -5.095], Max ULP = 0-1
+- Range B: 2 segments for [-5.095, -4.136], Max ULP = 1
+- Range C: 2 segments for [-4.136, -3.177], Max ULP = 1
+
+**Key Insight:** The polynomial coefficients were fitted for raw x values, not normalized u. Using `result = POLY4(c0, c1, c2, c3, c4, val)` directly instead of normalizing first eliminates subtraction/multiplication overhead and achieves better numerical stability.
+
+**Changes:**
+- Reduced asymptotic region from x < -4.136 back to x < -5.5
+- Added 8 new polynomial segments with raw x evaluation for [-5.5, -3.177]
+- Updated test thresholds from 15 to 10 ULP
+
+**Results:**
+
+| Metric | v2 (-02) | v3 (-03) | Improvement |
+|--------|----------|----------|-------------|
+| Max ULP | 11 | **7** | 36% reduction |
+| Worst x | -4.188 (poly boundary) | -5.969 (asymptotic only) | Poly now ≤1 |
+| Mean ULP | 0.02 | 0.01 | 50% reduction |
+| ULP ≤ 1 | 99.73% | 99.80% | +0.07% |
+
+**All polynomial segments now have Max ULP = 1.** The only remaining ULP > 1 is in the asymptotic region where the exp() approximation introduces error.
+
+**Branch:** `ivoitovych/issue-35290-gelu-ulp-fix-03`
 
 ---
 

@@ -14,10 +14,15 @@
  * - Adjacent values in this order should have ULP distance of 1
  * - Both +0 and -0 map to the same index (ULP distance = 0)
  *
- * GELU Bug Summary:
- * - Region 1 (Deep Negative Tail, x < -5.5): Max ULP = 32,767 (hardware returns 0.0)
+ * ORIGINAL BUG (before fix):
+ * - Region 1 (Deep Negative Tail, x < -5.5): Max ULP = 32,767 (hardware returned 0.0)
  * - Region 2 (Near-Zero, |x| < ~1e-4): Max ULP = 14,276 (floor value 2.98e-05)
  * - Region 3 (Transition, -5.5 to -4.0): Max ULP = 1,475 (poor polynomial fit)
+ *
+ * AFTER FIX (C6 adaptive polynomial + raw x segments):
+ * - Max ULP = 7 (at x = -5.969 in asymptotic region)
+ * - All polynomial segments have Max ULP = 1
+ * - 99.80% of BF16 values have ULP <= 1
  *
  * Run: ./build_Debug/test/ttnn/unit_tests_ttnn --gtest_filter="*GeluUlp*"
  */
@@ -536,7 +541,7 @@ TEST_F(GeluUlpBugTest, DeepNegativeTailLowULP) {
     // Region 1: Deep negative tail (x < -5.5)
     // With C6 fix + DAZ+FTZ model:
     // - x < -13.2: FTZ returns 0 (both expected and actual) - ULP = 0
-    // - -13.2 < x < -4.136: Asymptotic expansion - Max ULP <= 11
+    // - -13.2 < x < -5.5: Asymptotic expansion - Max ULP <= 7
 
     std::vector<std::pair<float, int32_t>> test_cases = {
         {-13.5f, 0},   // FTZ region - both expected and actual are 0
@@ -599,14 +604,14 @@ TEST_F(GeluUlpBugTest, NearZeroLowULP) {
 
 TEST_F(GeluUlpBugTest, TransitionRegionLowULP) {
     // Region 3: Transition region around segment boundaries
-    // With C6 fix + extended asymptotic: Max ULP <= 15 (worst at x=-4.188)
+    // With C6 fix + raw x polynomials: Max ULP <= 10 (worst at x=-5.969 in asymptotic)
 
     std::vector<std::pair<float, int32_t>> test_cases = {
         {-5.5f, 10},
         {-5.4375f, 10},
         {-5.375f, 10},
         {-5.25f, 10},
-        {-5.094f, 50},  // Worst case - segment boundary
+        {-5.094f, 10},  // Segment boundary - v3 achieves ULP=0 here
         {-5.0f, 10},
         {-4.75f, 10},
         {-4.5f, 10},
@@ -636,7 +641,7 @@ TEST_F(GeluUlpBugTest, TransitionRegionLowULP) {
     }
 
     // Verify overall max ULP is acceptable
-    EXPECT_LE(max_ulp, 15) << "Transition region max ULP should be <= 15, got " << max_ulp;
+    EXPECT_LE(max_ulp, 10) << "Transition region max ULP should be <= 10, got " << max_ulp;
 }
 
 TEST_F(GeluUlpBugTest, FTZBoundaryVerification) {
@@ -696,7 +701,7 @@ TEST_F(GeluUlpBugTest, DebugWorstCases) {
     std::cout << "============================================================\n\n";
 
     // Worst cases from comprehensive analysis:
-    // 1. Asymptotic/polynomial boundary: x = -4.188 (Max ULP = 11)
+    // 1. Asymptotic region: x = -5.969 (Max ULP = 7)
     // 2. Deep neg asymptotic: x around -6 to -13
 
     std::vector<std::pair<float, std::string>> test_values = {
@@ -742,7 +747,7 @@ TEST_F(GeluUlpBugTest, DebugWorstCases) {
     std::cout << "Max ULP across all test cases: " << max_ulp << "\n";
 
     // Verify max ULP is acceptable
-    EXPECT_LE(max_ulp, 15) << "Expected max ULP <= 15, got " << max_ulp;
+    EXPECT_LE(max_ulp, 10) << "Expected max ULP <= 10, got " << max_ulp;
 }
 
 TEST_F(GeluUlpBugTest, ComprehensiveULPBySegment) {
@@ -762,9 +767,9 @@ TEST_F(GeluUlpBugTest, ComprehensiveULPBySegment) {
     std::vector<SegmentStats> segments = {
         {"Deep neg (FTZ)", -std::numeric_limits<float>::max(), -13.2f},
         {"Deep neg (asymp)", -13.2f, -5.5f},
-        {"Seg 7 [-5.5,-5.095]", -5.5f, -5.095f},
-        {"Seg 8 [-5.095,-4.136]", -5.095f, -4.136f},
-        {"Seg 9 [-4.136,-3.177]", -4.136f, -3.177f},
+        {"Range A [-5.5,-5.095]", -5.5f, -5.095f},
+        {"Range B [-5.095,-4.136]", -5.095f, -4.136f},
+        {"Range C [-4.136,-3.177]", -4.136f, -3.177f},
         {"Seg 10 [-3.177,-2.218]", -3.177f, -2.218f},
         {"Seg 11 [-2.218,-1.258]", -2.218f, -1.258f},
         {"Seg 12 [-1.258,-0.299]", -1.258f, -0.299f},
@@ -1027,14 +1032,14 @@ TEST_F(GeluUlpBugTest, SummaryStatistics) {
     std::cout << "Region 2 (Near-Zero):      Max ULP = " << max_ulp_region2 << "\n";
     std::cout << "Region 3 (Polynomials):    Max ULP = " << max_ulp_region3 << "\n";
     std::cout << "\n";
-    std::cout << "Expected with C6 fix + extended asymptotic: Max ULP <= 11 (at x=-4.188)\n";
+    std::cout << "Expected with C6 fix + raw x polynomials: Max ULP <= 7 (at x=-5.969)\n";
     std::cout << "Hardware model: DAZ+FTZ (denormals treated as zero)\n";
     std::cout << "Source: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h\n";
     std::cout << "========================================\n";
 
     // Verify fix works - ULP should be low
     int32_t overall_max = std::max({max_ulp_region1, max_ulp_region2, max_ulp_region3});
-    EXPECT_LE(overall_max, 15) << "Overall Max ULP should be <= 15, got " << overall_max;
+    EXPECT_LE(overall_max, 10) << "Overall Max ULP should be <= 10, got " << overall_max;
 }
 
 TEST_F(GeluUlpBugTest, SubnormalOutputsFlushedToZero) {
@@ -1138,7 +1143,7 @@ TEST_F(GeluUlpBugTest, MonotonicityVerification) {
     //
     // NOTE: Due to approximation errors at the asymptotic/polynomial boundary,
     // we allow small ULP tolerance violations. The known worst case is at x=-4.188
-    // where Max ULP = 11. Gross monotonicity violations indicate implementation bugs.
+    // where Max ULP = 7. Gross monotonicity violations indicate implementation bugs.
 
     std::array<uint32_t, 4> dims = {1, 1, 32, 32};
     ttnn::Shape shape(dims);
@@ -1187,7 +1192,7 @@ TEST_F(GeluUlpBugTest, MonotonicityVerification) {
 
     // Tolerance: allow violations where adjacent outputs differ by at most 5 ULP
     // This catches gross monotonicity bugs while allowing small approximation errors
-    // at asymptotic/polynomial boundary (known worst case: x=-4.188 with Max ULP=11)
+    // at asymptotic region (known worst case: x=-5.969 with Max ULP=7)
     const int32_t ULP_TOLERANCE = 5;
 
     int32_t descending_violations = 0;

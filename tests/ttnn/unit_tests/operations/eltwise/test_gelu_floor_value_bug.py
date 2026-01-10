@@ -11,11 +11,11 @@ low ULP error across all BFloat16 values.
 Hardware Model: Tenstorrent SFPU uses DAZ+FTZ (Denormals-Are-Zero + Flush-To-Zero)
 Per tech_reports/Handling_Special_Value/special_values.md: "denormals | all | 0x0"
 
-Expected Results (with C6 fix):
-- Max ULP: 46 (at segment boundary x=-5.094)
+Expected Results (with C6 fix + raw x polynomials v3):
+- Max ULP: 7 (at x=-5.969 in asymptotic region)
 - Mean ULP: 0.01
-- 99.78% of values have ULP <= 1
-- 0% of values have ULP > 100
+- 99.80% of values have ULP <= 1
+- All polynomial segments have Max ULP = 1
 
 Source: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h
 
@@ -227,7 +227,9 @@ class TestGeluTransitionRegion:
     """
     Tests for the transition region around segment boundaries.
 
-    With C6 fix: Max ULP ≤ 46 (at segment 8 boundary x=-5.094)
+    With C6 fix + raw x polynomials (v3): Max ULP ≤ 10
+    All polynomial segments have Max ULP = 1
+    Worst case is in asymptotic region at x=-5.969 with Max ULP = 7
     """
 
     @pytest.mark.parametrize(
@@ -237,7 +239,7 @@ class TestGeluTransitionRegion:
             (-5.4375, 10),
             (-5.375, 10),
             (-5.25, 10),
-            (-5.094, 50),  # Worst case - segment boundary
+            (-5.094, 10),  # Segment boundary - v3 achieves ULP=0 here
             (-5.0, 10),
             (-4.75, 10),
             (-4.5, 10),
@@ -330,7 +332,7 @@ def test_gelu_ulp_summary(device):
     logger.info("")
     logger.info("REGION 3: POLYNOMIAL SEGMENTS [-5.5, 3.0]")
     logger.info("-" * 80)
-    logger.info("C6 fix: 9 adaptive polynomial segments with optimized coefficients")
+    logger.info("C6 fix v3: 14 polynomial segments (8 raw x + 6 normalized u), all with Max ULP = 1")
     logger.info("")
     logger.info(f"{'Value':>10} | {'Expected':>14} | {'Actual':>14} | {'ULP Error':>12}")
     logger.info("-" * 60)
@@ -359,12 +361,13 @@ def test_gelu_ulp_summary(device):
     logger.info(f"Region 2 (Near-Zero):     Max ULP = {max_ulp_region2}")
     logger.info(f"Region 3 (Polynomials):   Max ULP = {max_ulp_region3}")
     logger.info("")
-    logger.info("Expected with C6 fix: Max ULP ≤ 46 (at segment boundary x=-5.094)")
+    logger.info("Expected with C6 fix v3: Max ULP ≤ 7 (at x=-5.969 in asymptotic region)")
+    logger.info("All polynomial segments have Max ULP = 1")
     logger.info("")
     logger.info("Hardware model: DAZ+FTZ (denormals treated as zero)")
     logger.info("Source: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h")
     logger.info("=" * 100)
 
-    # Verify overall max ULP is acceptable
+    # Verify overall max ULP is acceptable (v3 achieves Max ULP = 7)
     overall_max = max(max_ulp_region1, max_ulp_region2, max_ulp_region3)
-    assert overall_max <= 50, f"Expected overall Max ULP <= 50, got {overall_max}"
+    assert overall_max <= 10, f"Expected overall Max ULP <= 10, got {overall_max}"
