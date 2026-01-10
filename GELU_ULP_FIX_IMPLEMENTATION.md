@@ -2,7 +2,7 @@
 
 **GitHub Issue:** https://github.com/tenstorrent/tt-metal/issues/35290
 
-**Branch:** `ivoitovych/issue-35290-gelu-ulp-fix-03`
+**Branch:** `ivoitovych/issue-35290-gelu-ulp-fix-04`
 
 **Base Commit:** `50b633663b48e5dabc2f9ddc32ceb28c0a11c873`
 
@@ -64,7 +64,8 @@ ULP > 1 is in the asymptotic region (exp() approximation error).
 |---------|--------|---------|------------|
 | v1 | -gelu-ulp-fix | 46 | Initial C6 implementation |
 | v2 | -gelu-ulp-fix-02 | 11 | Extended asymptotic to -4.136 |
-| **v3** | **-gelu-ulp-fix-03** | **7** | Raw x polynomials for [-5.5, -3.177] |
+| v3 | -gelu-ulp-fix-03 | 7 | Raw x polynomials for [-5.5, -3.177] |
+| **v4** | **-gelu-ulp-fix-04** | **7** | Added FTZ threshold research doc |
 
 ### Hardware Model Correction
 
@@ -441,6 +442,14 @@ x=3.0:     Max ULP = 1 (identity function region)
 **All polynomial segments now have Max ULP = 1.** The only remaining ULP > 1 is in the asymptotic region where the exp() approximation introduces error.
 
 **Branch:** `ivoitovych/issue-35290-gelu-ulp-fix-03`
+
+### 2026-01-10: FTZ Threshold Research (v4)
+
+**Added:** `GELU_BF16_Zero_Saturation_Threshold_Research.md` documenting MPFR 256-bit precision analysis.
+
+**Key Finding:** True zero saturation threshold is x = -13.1875 (bf16: 0xC153), not -8.375 as fp64 suggests. The fp64 erf() function saturates to -1.0 prematurely, giving incorrect threshold.
+
+**Branch:** `ivoitovych/issue-35290-gelu-ulp-fix-04`
 
 ---
 
