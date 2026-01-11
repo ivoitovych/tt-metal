@@ -35,6 +35,7 @@
 #include <limits>
 #include <iomanip>
 #include <set>
+#include <mpfr.h>
 
 #include <tt-metalium/bfloat16.hpp>
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -270,20 +271,65 @@ inline int32_t ulp_distance_bf16(float a, float b) {
 }
 
 /**
- * Exact GELU using erfc to avoid catastrophic cancellation for negative x.
+ * Exact GELU using MPFR 256-bit precision.
  *
  * GELU(x) = 0.5 * x * (1 + erf(x/sqrt(2)))
  *
- * For negative x, we use: GELU(x) = 0.5 * x * erfc(-x/sqrt(2))
- * This avoids the (1 + erf(large_negative)) cancellation.
+ * This uses MPFR (Multiple Precision Floating-Point Reliable) library
+ * to compute the true GELU value with 256-bit precision. This is necessary
+ * because the standard fp64 erf() function saturates to -1.0 prematurely
+ * for large negative inputs (around x = -8.375), giving incorrect reference
+ * values. The true zero saturation threshold is x = -13.1875.
+ *
+ * See GELU_BF16_Zero_Saturation_Threshold_Research.md for details.
  */
 inline double gelu_exact(double x) {
-    const double SQRT_2 = std::sqrt(2.0);
-    if (x >= 0) {
-        return 0.5 * x * (1.0 + std::erf(x / SQRT_2));
-    } else {
-        return 0.5 * x * std::erfc(-x / SQRT_2);
-    }
+    constexpr mpfr_prec_t precision = 256;
+
+    mpfr_t mpfr_x, sqrt2, x_div_sqrt2, erf_result, one, half, one_plus_erf, result;
+
+    mpfr_init2(mpfr_x, precision);
+    mpfr_init2(sqrt2, precision);
+    mpfr_init2(x_div_sqrt2, precision);
+    mpfr_init2(erf_result, precision);
+    mpfr_init2(one, precision);
+    mpfr_init2(half, precision);
+    mpfr_init2(one_plus_erf, precision);
+    mpfr_init2(result, precision);
+
+    // Set values
+    mpfr_set_d(mpfr_x, x, MPFR_RNDN);
+    mpfr_set_ui(one, 1, MPFR_RNDN);
+    mpfr_set_d(half, 0.5, MPFR_RNDN);
+    mpfr_sqrt_ui(sqrt2, 2, MPFR_RNDN);
+
+    // Compute x / sqrt(2)
+    mpfr_div(x_div_sqrt2, mpfr_x, sqrt2, MPFR_RNDN);
+
+    // Compute erf(x / sqrt(2))
+    mpfr_erf(erf_result, x_div_sqrt2, MPFR_RNDN);
+
+    // Compute 1 + erf(x / sqrt(2))
+    mpfr_add(one_plus_erf, one, erf_result, MPFR_RNDN);
+
+    // Compute 0.5 * x * (1 + erf(x / sqrt(2)))
+    mpfr_mul(result, mpfr_x, half, MPFR_RNDN);
+    mpfr_mul(result, result, one_plus_erf, MPFR_RNDN);
+
+    // Extract result as double
+    double gelu_result = mpfr_get_d(result, MPFR_RNDN);
+
+    // Clean up
+    mpfr_clear(mpfr_x);
+    mpfr_clear(sqrt2);
+    mpfr_clear(x_div_sqrt2);
+    mpfr_clear(erf_result);
+    mpfr_clear(one);
+    mpfr_clear(half);
+    mpfr_clear(one_plus_erf);
+    mpfr_clear(result);
+
+    return gelu_result;
 }
 
 /**

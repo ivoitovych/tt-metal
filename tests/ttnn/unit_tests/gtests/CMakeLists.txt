@@ -69,11 +69,17 @@ target_sources(
         test_sub_int.cpp
 )
 target_include_directories(unit_tests_ttnn_basic PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+# Find MPFR for high-precision GELU reference in test_gelu_ulp_bug.cpp
+find_library(MPFR_LIBRARY mpfr)
+find_library(GMP_LIBRARY gmp)
+
 target_link_libraries(
     unit_tests_ttnn_basic
     PRIVATE
         test_common_libs
         TTNN::CPP
+        ${MPFR_LIBRARY}
+        ${GMP_LIBRARY}
 )
 
 add_executable(unit_tests_ttnn)

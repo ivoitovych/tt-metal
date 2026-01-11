@@ -29,6 +29,7 @@ import torch
 import ttnn
 import numpy as np
 from loguru import logger
+from mpmath import mp, erf as mp_erf
 
 
 def float_to_bf16_bits(f: float) -> int:
@@ -116,11 +117,22 @@ def ulp_distance_bf16_daz(a: float, b: float) -> int:
 
 
 def gelu_exact(x: float) -> float:
-    """Exact GELU using erfc to avoid catastrophic cancellation for negative x."""
-    if x >= 0:
-        return 0.5 * x * (1.0 + math.erf(x / math.sqrt(2.0)))
-    else:
-        return 0.5 * x * math.erfc(-x / math.sqrt(2.0))
+    """
+    Exact GELU using mpmath 256-bit precision.
+
+    GELU(x) = 0.5 * x * (1 + erf(x/sqrt(2)))
+
+    This uses mpmath for arbitrary precision arithmetic to avoid the fp64 erf()
+    saturation issue where erf(x) saturates to -1.0 at x ≈ -8.375, giving
+    incorrect reference values. The true zero saturation threshold is x = -13.1875.
+
+    See GELU_BF16_Zero_Saturation_Threshold_Research.md for details.
+    """
+    mp.prec = 256  # 256-bit precision
+    x_mp = mp.mpf(x)
+    sqrt2 = mp.sqrt(2)
+    result = mp.mpf("0.5") * x_mp * (1 + mp_erf(x_mp / sqrt2))
+    return float(result)
 
 
 def gelu_expected_bf16_daz(x: float) -> float:
