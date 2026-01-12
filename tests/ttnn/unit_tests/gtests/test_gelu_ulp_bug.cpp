@@ -1403,4 +1403,213 @@ TEST_F(GeluUlpBugTest, DenormalInputsProduceSameOutputAsZero) {
                                  << mismatch_count << " produced different values";
 }
 
+// =============================================================================
+// FP64 vs MPFR-256 Reference Comparison Test
+// =============================================================================
+
+/**
+ * FP64-only GELU reference using standard library erf(), with DAZ+FTZ.
+ *
+ * WARNING: This function is INACCURATE for x < -8.375 because fp64 erf()
+ * saturates to -1.0, making (1 + erf) = 0 and thus GELU(x) = 0.
+ * The true zero saturation threshold is x = -13.1875.
+ *
+ * This function exists ONLY to demonstrate why MPFR is needed.
+ *
+ * Applies DAZ to input and FTZ to output to match hardware behavior.
+ */
+inline float gelu_fp64_with_daz_ftz(float x) {
+    // DAZ: Apply denormal-as-zero to input
+    float x_daz = bf16_ulp::bf16_daz_normalize(x);
+
+    // Compute GELU using fp64 precision
+    constexpr double SQRT2 = 1.4142135623730950488;
+    double result = 0.5 * static_cast<double>(x_daz) * (1.0 + std::erf(static_cast<double>(x_daz) / SQRT2));
+
+    // FTZ: Apply flush-to-zero to output
+    return bf16_ulp::bf16_daz_normalize(static_cast<float>(result));
+}
+
+/**
+ * MPFR-256 GELU reference with DAZ+FTZ.
+ *
+ * Uses 256-bit precision for accurate erf() computation.
+ * Applies DAZ to input and FTZ to output to match hardware behavior.
+ */
+inline float gelu_mpfr256_with_daz_ftz(float x) {
+    // DAZ: Apply denormal-as-zero to input
+    float x_daz = bf16_ulp::bf16_daz_normalize(x);
+
+    // Compute GELU using MPFR 256-bit precision
+    double result = bf16_ulp::gelu_exact(static_cast<double>(x_daz));
+
+    // FTZ: Apply flush-to-zero to output
+    return bf16_ulp::bf16_daz_normalize(static_cast<float>(result));
+}
+
+/**
+ * Test showing ULP difference between fp64 and MPFR-256 GELU references.
+ *
+ * This test demonstrates why MPFR is needed: fp64 erf() saturates to -1.0
+ * at x ≈ -8.375, causing the fp64 reference to return 0.0 prematurely.
+ * The MPFR-256 reference correctly computes tiny non-zero values down to
+ * x = -13.1875 (the true BF16 zero saturation threshold).
+ */
+TEST_F(BFloat16UlpTest, Fp64VsMpfr256ReferenceComparison) {
+    std::cout << "\n";
+    std::cout << "================================================================\n";
+    std::cout << "FP64 vs MPFR-256 GELU REFERENCE COMPARISON\n";
+    std::cout << "================================================================\n";
+    std::cout << "This test shows why MPFR-256 is needed for accurate reference.\n";
+    std::cout << "FP64 erf() saturates to -1.0 at x ≈ -8.375, giving GELU(x) = 0\n";
+    std::cout << "prematurely. True zero threshold is x = -13.1875.\n\n";
+
+    struct ComparisonResult {
+        float x;
+        double fp64_result;
+        double mpfr_result;
+        int32_t ulp_diff;
+    };
+
+    std::vector<ComparisonResult> worst_cases;
+    int32_t max_ulp_diff = 0;
+    int32_t total_count = 0;
+    int32_t agree_count = 0;     // ULP diff = 0
+    int32_t close_count = 0;     // ULP diff 1-10
+    int32_t moderate_count = 0;  // ULP diff 11-1000
+    int32_t severe_count = 0;    // ULP diff > 1000
+
+    float first_divergence_x = 0;
+    bool found_first_divergence = false;
+
+    // Scan all normal BF16 values
+    for (uint32_t bits = 0; bits <= 0xFFFF; ++bits) {
+        uint16_t bf16_bits = static_cast<uint16_t>(bits);
+
+        // Skip NaN and Inf
+        uint16_t exp_bits = (bf16_bits >> 7) & 0xFF;
+        if (exp_bits == 0xFF) {
+            continue;
+        }
+
+        // Skip denormals (they map to zero anyway)
+        if (bf16_ulp::is_bf16_denormal(bf16_bits)) {
+            continue;
+        }
+
+        float x = bf16_ulp::bf16_bits_to_float(bf16_bits);
+        total_count++;
+
+        // Compute both references with DAZ+FTZ applied
+        float fp64_bf16 = gelu_fp64_with_daz_ftz(x);
+        float mpfr_bf16 = gelu_mpfr256_with_daz_ftz(x);
+
+        // Calculate ULP difference between the two BF16 results
+        int32_t ulp_diff = bf16_ulp::ulp_distance_bf16_daz(fp64_bf16, mpfr_bf16);
+
+        if (ulp_diff == 0) {
+            agree_count++;
+        } else if (ulp_diff <= 10) {
+            close_count++;
+        } else if (ulp_diff <= 1000) {
+            moderate_count++;
+        } else {
+            severe_count++;
+        }
+
+        if (ulp_diff > 0 && !found_first_divergence) {
+            first_divergence_x = x;
+            found_first_divergence = true;
+        }
+
+        if (ulp_diff > max_ulp_diff) {
+            max_ulp_diff = ulp_diff;
+        }
+
+        // Collect worst cases for display
+        if (ulp_diff > 100 && worst_cases.size() < 50) {
+            worst_cases.push_back({x, static_cast<double>(fp64_bf16), static_cast<double>(mpfr_bf16), ulp_diff});
+        }
+    }
+
+    // Sort worst cases by ULP diff (descending)
+    std::sort(
+        worst_cases.begin(), worst_cases.end(), [](const auto& a, const auto& b) { return a.ulp_diff > b.ulp_diff; });
+
+    // Print statistics
+    std::cout << "STATISTICS:\n";
+    std::cout << std::string(60, '-') << "\n";
+    std::cout << "Total BF16 values tested:        " << total_count << "\n";
+    std::cout << "FP64 and MPFR agree (ULP=0):     " << agree_count << " (" << std::fixed << std::setprecision(2)
+              << (100.0 * agree_count / total_count) << "%)\n";
+    std::cout << "Close (ULP 1-10):                " << close_count << "\n";
+    std::cout << "Moderate difference (ULP 11-1000): " << moderate_count << "\n";
+    std::cout << "SEVERE difference (ULP > 1000):  " << severe_count << "\n";
+    std::cout << "Maximum ULP difference:          " << max_ulp_diff << "\n";
+    std::cout << "First divergence at x =          " << first_divergence_x << "\n";
+
+    // Print worst cases
+    if (!worst_cases.empty()) {
+        std::cout << "\nWORST CASES (FP64 vs MPFR-256 difference > 100 ULP):\n";
+        std::cout << std::string(100, '-') << "\n";
+        std::cout << std::left << std::setw(12) << "x" << std::setw(20) << "FP64 GELU" << std::setw(20)
+                  << "MPFR-256 GELU" << std::setw(12) << "ULP diff"
+                  << "Notes\n";
+        std::cout << std::string(100, '-') << "\n";
+
+        for (size_t i = 0; i < std::min(worst_cases.size(), size_t(30)); ++i) {
+            const auto& wc = worst_cases[i];
+            std::cout << std::scientific << std::setprecision(4) << std::left << std::setw(12) << wc.x << std::setw(20)
+                      << wc.fp64_result << std::setw(20) << wc.mpfr_result << std::fixed << std::setw(12)
+                      << wc.ulp_diff;
+
+            // Add notes
+            if (wc.fp64_result == 0.0 && wc.mpfr_result != 0.0) {
+                std::cout << "FP64 erf() saturated!";
+            }
+            std::cout << "\n";
+        }
+    }
+
+    // Print specific boundary region
+    std::cout << "\nBOUNDARY REGION DETAIL (x from -9.0 to -8.0):\n";
+    std::cout << std::string(100, '-') << "\n";
+    std::cout << std::left << std::setw(12) << "x" << std::setw(20) << "FP64+FTZ" << std::setw(20) << "MPFR+FTZ"
+              << std::setw(15) << "1+erf (FP64)"
+              << "ULP diff\n";
+    std::cout << std::string(100, '-') << "\n";
+
+    for (uint16_t bits = 0xC110; bits >= 0xC100; --bits) {  // -9.0 to -8.0
+        float x = bf16_ulp::bf16_bits_to_float(bits);
+
+        // Compute both with DAZ+FTZ
+        float fp64_bf16 = gelu_fp64_with_daz_ftz(x);
+        float mpfr_bf16 = gelu_mpfr256_with_daz_ftz(x);
+
+        // Compute 1 + erf for FP64 to show saturation
+        constexpr double SQRT2 = 1.4142135623730950488;
+        double one_plus_erf_fp64 = 1.0 + std::erf(static_cast<double>(x) / SQRT2);
+
+        int32_t ulp_diff = bf16_ulp::ulp_distance_bf16_daz(fp64_bf16, mpfr_bf16);
+
+        std::cout << std::fixed << std::setprecision(4) << std::left << std::setw(12) << x << std::scientific
+                  << std::setprecision(6) << std::setw(20) << fp64_bf16 << std::setw(20) << mpfr_bf16 << std::setw(15)
+                  << one_plus_erf_fp64 << std::fixed << ulp_diff << "\n";
+    }
+
+    std::cout << "\n================================================================\n";
+    std::cout << "CONCLUSION:\n";
+    std::cout << "================================================================\n";
+    std::cout << "FP64 erf() saturates to -1.0 around x = -8.375, causing\n";
+    std::cout << "(1 + erf) = 0 and thus GELU(x) = 0 prematurely.\n";
+    std::cout << "MPFR-256 correctly computes tiny non-zero GELU values.\n";
+    std::cout << "This affects " << (severe_count + moderate_count) << " BF16 values.\n";
+    std::cout << "================================================================\n";
+
+    // The test passes - it's informational
+    // But we do verify that there IS a significant difference
+    EXPECT_GT(max_ulp_diff, 1000) << "Expected significant FP64 vs MPFR difference in deep negative region";
+    EXPECT_GT(severe_count, 0) << "Expected some severe ULP differences";
+}
+
 }  // namespace ttnn::test
