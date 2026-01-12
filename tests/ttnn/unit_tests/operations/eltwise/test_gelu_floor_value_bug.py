@@ -23,11 +23,9 @@ Run: pytest tests/ttnn/unit_tests/operations/eltwise/test_gelu_floor_value_bug.p
 """
 
 import struct
-import math
 import pytest
 import torch
 import ttnn
-import numpy as np
 from loguru import logger
 from mpmath import mp, erf as mp_erf
 
