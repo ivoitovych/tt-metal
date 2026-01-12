@@ -466,9 +466,11 @@ This optimization allows skipping the expensive erf computation for 16,044 out o
 
 2. **The erf() function** in standard libraries saturates to ±1.0 before the mathematical function truly reaches those values.
 
-3. **MPFR or equivalent** arbitrary-precision libraries are essential for determining exact boundaries in floating-point implementations.
+3. **erfc() provides a simpler solution**: For negative x, use the identity `1 + erf(x/√2) = erfc(|x|/√2)`. The `erfc()` function returns small positive values for large arguments without saturation. This eliminates the need for MPFR in production code while matching MPFR-256 exactly (verified: 0 ULP difference across all BF16 values).
 
-4. **The true threshold** depends on the target format's smallest normal value, not on when intermediate calculations saturate.
+4. **MPFR is useful for research** to determine exact boundaries, but `erfc()` is sufficient for reference implementations.
+
+5. **The true threshold** depends on the target format's smallest normal value, not on when intermediate calculations saturate.
 
 ---
 
@@ -491,4 +493,4 @@ Zero Saturation Threshold: 0xC153 = -13.1875
 
 ---
 
-*Reference implementation uses MPFR 256-bit precision for correctness verification.*
+*Research used MPFR 256-bit precision for correctness verification. For production reference implementations, fp64 with `erfc()` is sufficient and matches MPFR-256 exactly.*

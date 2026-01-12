@@ -126,6 +126,9 @@ def gelu_exact(x: float) -> float:
     saturation issue where erf(x) saturates to -1.0 at x ≈ -8.375, giving
     incorrect reference values. The true zero saturation threshold is x = -13.1875.
 
+    Note: The C++ tests use fp64 erfc() instead, which matches mpmath exactly.
+    For negative x: 1 + erf(x/√2) = erfc(|x|/√2) avoids the saturation issue.
+
     See GELU_BF16_Zero_Saturation_Threshold_Research.md for details.
     """
     mp.prec = 256  # 256-bit precision

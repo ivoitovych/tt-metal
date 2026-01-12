@@ -452,16 +452,24 @@ x=3.0:     Max ULP = 1 (identity function region)
 
 **Branch:** `ivoitovych/issue-35290-gelu-ulp-fix-04`
 
-### 2026-01-12: MPFR/mpmath Reference Tests (PR Prep)
+### 2026-01-12: Reference Function Improvements (PR Prep)
 
 **Problem:** The reference GELU function used fp64 `erf()` which saturates at x ≈ -8.375, giving incorrect expected values for the deep negative region.
 
-**Solution:** Replaced fp64 reference with MPFR 256-bit precision (C++) and mpmath 256-bit precision (Python).
+**Solution (C++):** Use fp64 `erfc()` instead of `erf()` for negative x. Mathematical identity:
+```
+For x < 0: 1 + erf(x/√2) = erfc(|x|/√2)
+```
+The `erfc()` function returns small positive values for large arguments without saturation.
+
+**Verification:** fp64 `erfc()` matches MPFR-256 with **0 ULP difference** across all 65,026 valid BF16 values.
+
+**Solution (Python):** Uses `mpmath` 256-bit precision (standard Python arbitrary precision library).
 
 **Changes:**
-- C++ tests: Added `#include <mpfr.h>` and MPFR-based `gelu_exact()` function
-- Python tests: Added `from mpmath import mp, erf as mp_erf` and mpmath-based `gelu_exact()` function
-- CMakeLists.txt: Added MPFR/GMP library linking
+- C++ tests: `gelu_exact()` uses `erfc()` for negative x - no external dependencies
+- Python tests: Uses `mpmath` for 256-bit precision reference
+- CMakeLists.txt: Removed MPFR/GMP library linking (not needed)
 
 **Branch:** `ivoitovych/issue-35290-gelu-ulp-fix-draft-pr-prep`
 
