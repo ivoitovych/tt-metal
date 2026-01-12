@@ -2,11 +2,11 @@
 
 **GitHub Issue:** https://github.com/tenstorrent/tt-metal/issues/35290
 
-**Branch:** `ivoitovych/issue-35290-gelu-ulp-fix-04`
+**Branch:** `ivoitovych/issue-35290-gelu-ulp-fix-draft-pr-prep`
 
 **Base Commit:** `50b633663b48e5dabc2f9ddc32ceb28c0a11c873`
 
-**Status:** IMPLEMENTED AND VERIFIED (v3)
+**Status:** IMPLEMENTED AND VERIFIED (v3 + MPFR reference tests)
 
 ---
 
@@ -65,7 +65,8 @@ ULP > 1 is in the asymptotic region (exp() approximation error).
 | v1 | -gelu-ulp-fix | 46 | Initial C6 implementation |
 | v2 | -gelu-ulp-fix-02 | 11 | Extended asymptotic to -4.136 |
 | v3 | -gelu-ulp-fix-03 | 7 | Raw x polynomials for [-5.5, -3.177] |
-| **v4** | **-gelu-ulp-fix-04** | **7** | Added FTZ threshold research doc |
+| v4 | -gelu-ulp-fix-04 | 7 | Added FTZ threshold research doc |
+| **PR** | **-draft-pr-prep** | **7** | MPFR/mpmath 256-bit reference tests |
 
 ### Hardware Model Correction
 
@@ -451,6 +452,21 @@ x=3.0:     Max ULP = 1 (identity function region)
 
 **Branch:** `ivoitovych/issue-35290-gelu-ulp-fix-04`
 
+### 2026-01-12: MPFR/mpmath Reference Tests (PR Prep)
+
+**Problem:** The reference GELU function used fp64 `erf()` which saturates at x ≈ -8.375, giving incorrect expected values for the deep negative region.
+
+**Solution:** Replaced fp64 reference with MPFR 256-bit precision (C++) and mpmath 256-bit precision (Python).
+
+**Changes:**
+- C++ tests: Added `#include <mpfr.h>` and MPFR-based `gelu_exact()` function
+- Python tests: Added `from mpmath import mp, erf as mp_erf` and mpmath-based `gelu_exact()` function
+- CMakeLists.txt: Added MPFR/GMP library linking
+
+**Branch:** `ivoitovych/issue-35290-gelu-ulp-fix-draft-pr-prep`
+
+**Note:** This branch removed experimental v4 commits (11-segment polynomial approach) that were inefficient (5 coefficients per ~4 BF16 points). The core v3 implementation with Max ULP = 7 is retained.
+
 ---
 
 ## References
@@ -458,3 +474,4 @@ x=3.0:     Max ULP = 1 (identity function region)
 - **GitHub Issue:** https://github.com/tenstorrent/tt-metal/issues/35290
 - **Research Repository:** https://github.com/ivoitovych/bf16_gelu_research
 - **Bug Report Branch:** https://github.com/ivoitovych/tt-metal/tree/ivoitovych/bug-report-gelu-floor-value-ulp-03
+- **PR Prep Branch:** https://github.com/ivoitovych/tt-metal/tree/ivoitovych/issue-35290-gelu-ulp-fix-draft-pr-prep
