@@ -51,6 +51,12 @@ inline sfpi::vFloat calculate_gelu_c6(sfpi::vFloat val) {
     //
     // For -13.2 < x < -5.5: Asymptotic expansion
     // For x < -13.2: FTZ forces result to 0 (unavoidable hardware limitation)
+    //
+    // Threshold choice: -13.2f is a conservative margin above the theoretical
+    // BF16 zero threshold of -13.1875 (0xC153). This accounts for:
+    // - Float32 intermediate precision in exp() computation
+    // - Potential variation in SFPU exp() approximation across chips
+    // See GELU_BF16_Zero_Saturation_Threshold_Research.md for derivation.
     v_elseif(val < -5.5f) {
         v_if(val < -13.2f) {
             // Below practical precision - exp produces denormals, FTZ flushes to 0
@@ -223,32 +229,6 @@ inline sfpi::vFloat calculate_gelu_c6(sfpi::vFloat val) {
     return result;
 }
 
-// Legacy Chebyshev implementation (kept for reference/comparison)
-#define POLYVAL15(c15, c14, c13, c12, c11, c10, c9, c8, c7, c6, c5, c4, c3, c2, c1, c0, x)                         \
-    (((((((((((((((c15) * (x) + (c14)) * (x) + (c13)) * (x) + (c12)) * (x) + (c11)) * (x) + (c10)) * (x) + (c9)) * \
-                (x) +                                                                                              \
-            (c8)) *                                                                                                \
-               (x) +                                                                                               \
-           (c7)) *                                                                                                 \
-              (x) +                                                                                                \
-          (c6)) *                                                                                                  \
-             (x) +                                                                                                 \
-         (c5)) *                                                                                                   \
-            (x) +                                                                                                  \
-        (c4)) *                                                                                                    \
-           (x) +                                                                                                   \
-       (c3)) *                                                                                                     \
-          (x) +                                                                                                    \
-      (c2)) *                                                                                                      \
-         (x) +                                                                                                     \
-     (c1)) * (x) +                                                                                                 \
-        (c0)
-
-inline sfpi::vFloat calculate_gelu_chebyshev(sfpi::vFloat val) {
-    // Use C6 adaptive polynomial implementation
-    return calculate_gelu_c6(val);
-}
-
 template <bool APPROXIMATION_MODE>
 void gelu_init() {
     _init_gelu_<APPROXIMATION_MODE>();
@@ -264,16 +244,19 @@ inline void calculate_gelu() {
     if constexpr (APPROXIMATION_MODE) {
         _calculate_gelu_<APPROXIMATION_MODE, ITERATIONS>();
     } else {
+        // SFPI dst_reg is an iterator over destination register tiles.
+        // dst_reg[0] accesses current tile, dst_reg++ advances to next.
+        // Each iteration processes one tile (typically 32 elements).
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat in = sfpi::dst_reg[0];
-        sfpi::vFloat result = in;
-        v_if(in == 0.0f) { result = 0.0f; }
-        v_elseif(in < 3.0f) { result = calculate_gelu_c6(in); }
-        v_endif;
-        sfpi::dst_reg[0] = result;
-        sfpi::dst_reg++;
-    }
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vFloat in = sfpi::dst_reg[0];
+            sfpi::vFloat result = in;
+            v_if(in == 0.0f) { result = 0.0f; }
+            v_elseif(in < 3.0f) { result = calculate_gelu_c6(in); }
+            v_endif;
+            sfpi::dst_reg[0] = result;
+            sfpi::dst_reg++;
+        }
     }
 }
 

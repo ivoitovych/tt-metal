@@ -475,6 +475,46 @@ The `erfc()` function returns small positive values for large arguments without 
 
 **Note:** This branch removed experimental v4 commits (11-segment polynomial approach) that were inefficient (5 coefficients per ~4 BF16 points). The core v3 implementation with Max ULP = 7 is retained.
 
+### 2026-01-12: Pre-PR Source Code Cleanup
+
+**Objective:** Clean up kernel headers before creating final PR branch. Remove dead code and add clarifying comments.
+
+**Dead Code Removed:**
+
+1. **`POLYVAL15` macro** - 16-coefficient Horner polynomial macro from the original Chebyshev implementation.
+   - Never used in the new C6 adaptive polynomial approach
+   - All polynomial evaluations use the simpler `POLY4` macro (degree-4)
+   - Removed from both Wormhole and Blackhole headers
+
+2. **`calculate_gelu_chebyshev()` wrapper function** - Trivial wrapper that just called `calculate_gelu_c6()`.
+   - Created during migration from Chebyshev to C6 approach
+   - No longer needed since `calculate_gelu()` template directly calls `calculate_gelu_c6()`
+   - Removed from both Wormhole and Blackhole headers
+
+**Comments Added:**
+
+1. **Threshold explanation** (line 55-59 in both headers):
+   ```cpp
+   // Threshold choice: -13.2f is a conservative margin above the theoretical
+   // BF16 zero threshold of -13.1875 (0xC153). This accounts for:
+   // - Float32 intermediate precision in exp() computation
+   // - Potential variation in SFPU exp() approximation across chips
+   // See GELU_BF16_Zero_Saturation_Threshold_Research.md for derivation.
+   ```
+
+2. **SFPI dst_reg pattern clarification** (in `calculate_gelu()` template):
+   ```cpp
+   // SFPI dst_reg is an iterator over destination register tiles.
+   // dst_reg[0] accesses current tile, dst_reg++ advances to next.
+   // Each iteration processes one tile (typically 32 elements).
+   ```
+
+**Files Modified:**
+- `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h`
+- `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h`
+
+**Note:** Documentation files (bug report, research docs) are retained in this branch for reference. They can be excluded when squashing commits for the final PR.
+
 ---
 
 ## References
