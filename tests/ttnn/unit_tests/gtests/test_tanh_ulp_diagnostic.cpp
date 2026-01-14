@@ -609,9 +609,9 @@ TEST_F(TanhUlpDeviceTest, ExhaustiveBf16Sweep) {
         std::cout << "  ULP: " << max_ulp << std::endl;
     }
 
-    // Assertions
-    EXPECT_LE(max_ulp, 10) << "Max ULP should be <= 10";
-    EXPECT_GE(count_ulp_le_1, static_cast<int>(0.99 * ulp_errors.size())) << "At least 99% should have ULP <= 1";
+    // Assertions - tanh has excellent precision (Max ULP = 1 expected)
+    EXPECT_LE(max_ulp, 2) << "Max ULP should be <= 2 for tanh";
+    EXPECT_EQ(count_ulp_le_1, static_cast<int>(ulp_errors.size())) << "All values should have ULP <= 1";
 }
 
 TEST_F(TanhUlpDeviceTest, AllPositiveDenormalsProduceZero) {

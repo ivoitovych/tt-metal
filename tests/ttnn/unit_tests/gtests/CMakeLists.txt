@@ -71,8 +71,8 @@ target_sources(
 )
 target_include_directories(unit_tests_ttnn_basic PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 # Find MPFR for high-precision reference implementations in ULP diagnostic tests
-find_library(MPFR_LIBRARY mpfr)
-find_library(GMP_LIBRARY gmp)
+find_library(MPFR_LIBRARY mpfr REQUIRED)
+find_library(GMP_LIBRARY gmp REQUIRED)
 
 target_link_libraries(
     unit_tests_ttnn_basic

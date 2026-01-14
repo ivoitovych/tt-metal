@@ -272,9 +272,6 @@ inline double tanh_bw_exact(double x) {
     return tanh_bw_result;
 }
 
-// Alias for backward compatibility - use mpfr-256 by default
-inline double tanh_bw_reference(double x) { return tanh_bw_exact(x); }
-
 /**
  * Convert double to BF16 bits by truncation (no rounding).
  * This matches hardware behavior which truncates when converting to BF16.
@@ -814,8 +811,8 @@ TEST_F(TanhBwUlpDeviceTest, DenormalInputsProduceDerivativeOne) {
         std::cout << "All denormal inputs correctly produce derivative = 1.0 (DAZ verified)" << std::endl;
     }
 
-    EXPECT_LE(non_one_count, static_cast<int>(0.1 * denormal_values.size()))
-        << "Most denormal inputs should produce derivative close to 1.0";
+    // Under DAZ, all denormal inputs should be treated as zero, so tanh'(0) = 1
+    EXPECT_EQ(non_one_count, 0) << "All denormal inputs should produce derivative = 1.0 under DAZ";
 }
 
 }  // namespace ttnn::test

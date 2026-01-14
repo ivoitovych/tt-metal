@@ -98,10 +98,12 @@ Builds an explicit sorted list of all 65,025 normal BF16 values, then uses binar
 For each BF16 input value:
 1. Apply DAZ normalization (denormals -> 0)
 2. Convert to double precision
-3. Calculate `std::tanh()` in double precision
-4. Convert result back to BF16 (with truncation)
-5. Apply FTZ normalization
+3. Calculate `tanh()` using MPFR with 256-bit precision
+4. Convert result to float, then truncate to BF16
+5. Apply FTZ normalization (flush denormal outputs to zero)
 6. Compare with device output using ULP distance
+
+The C++ tests use MPFR-256 for authoritative reference values. A verification test confirms fp64 and mpfr-256 produce identical BF16 results for tanh.
 
 ## Implementation
 
@@ -230,14 +232,16 @@ pytest tests/ttnn/unit_tests/operations/eltwise/test_tanh_ulp_diagnostic.py -v
 
 5. **Complete Coverage**: All 65,025 normal BF16 values tested - no sampling or statistical estimation.
 
-## Comparison with GELU
+## Comparison with tanh_bw
 
-For context, the same methodology was previously applied to `ttnn::gelu`, which showed higher ULP errors in certain input ranges. The tanh implementation demonstrates superior precision across the entire BFloat16 range.
+For context, the same methodology was applied to `ttnn::tanh_bw` (backward/derivative). The forward tanh demonstrates superior precision compared to the backward pass.
 
-| Activation | Max ULP | % Exact (ULP=0) | % Within 1 ULP |
-|------------|---------|-----------------|----------------|
-| tanh | 1 | 95.26% | 100% |
-| gelu (before fix) | ~50+ | ~90% | ~95% |
+| Operation | Max ULP | % Exact (ULP=0) | % Within 1 ULP |
+|-----------|---------|-----------------|----------------|
+| tanh (forward) | 1 | 95.26% | 100% |
+| tanh_bw (backward) | 15,139 | 93.60% | 97.97% |
+
+The high Max ULP in tanh_bw occurs in the saturation region where the derivative approaches zero.
 
 ## Files Reference
 

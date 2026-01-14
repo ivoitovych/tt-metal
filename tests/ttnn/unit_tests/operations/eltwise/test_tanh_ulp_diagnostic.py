@@ -775,9 +775,9 @@ class TestTanhExhaustiveBF16:
         else:
             logger.info(f"⚠ NEEDS ATTENTION: Max ULP = {max_ulp}")
 
-        # Assert reasonable precision
-        assert max_ulp <= 100, f"Excessive max ULP error: {max_ulp}"
-        assert ulp_le_2_pct >= 99.0, f"Too many values with ULP > 2: {100-ulp_le_2_pct:.2f}%"
+        # Assert excellent precision - tanh has Max ULP = 1
+        assert max_ulp <= 2, f"Max ULP should be <= 2 for tanh, got: {max_ulp}"
+        assert ulp_le_1_pct == 100.0, f"All values should have ULP <= 1, got: {ulp_le_1_pct:.2f}%"
 
 
 if __name__ == "__main__":

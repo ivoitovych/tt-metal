@@ -39,7 +39,7 @@ mpfr_mul(tanh_squared, tanh_result, tanh_result, MPFR_RNDN);  // tanh(x)^2
 mpfr_sub(result, one, tanh_squared, MPFR_RNDN);  // 1 - tanh(x)^2
 ```
 
-A verification test confirms that fp64 (`std::tanh`) and mpfr-256 produce identical BF16 results for 99.5% of values. The 352 differing values (0.5%) are in the saturation region where small precision differences in the double-precision calculation result in different BF16 truncation.
+A verification test confirms that fp64 (`std::tanh`) and mpfr-256 produce identical BF16 results for the vast majority of values. The small number of differing values are in the saturation region where small precision differences in the double-precision calculation can result in different BF16 truncation.
 
 ### Derivative Behavior by Region
 
@@ -111,7 +111,7 @@ All 127 positive denormal inputs correctly produce derivative = 1.0:
 | Operation | Max ULP | Mean ULP | % Within 1 ULP | % Within 2 ULP |
 |-----------|---------|----------|----------------|----------------|
 | tanh (forward) | 1 | 0.0474 | 100% | 100% |
-| tanh_bw (backward) | 15,139 | 130.02 | 98.44% | 98.58% |
+| tanh_bw (backward) | 15,139 | 155.59 | 97.97% | 98.11% |
 
 The backward pass has significantly higher ULP errors due to the saturation region behavior.
 
