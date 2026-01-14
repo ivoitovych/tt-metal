@@ -475,6 +475,30 @@ The `erfc()` function returns small positive values for large arguments without 
 
 **Note:** This branch removed experimental v4 commits (11-segment polynomial approach) that were inefficient (5 coefficients per ~4 BF16 points). The core v3 implementation with Max ULP = 7 is retained.
 
+### 2026-01-14: Test Performance Optimization
+
+**Problem:** Three comprehensive tests (ComprehensiveULPBySegment, CumulativeULPDistribution, MonotonicityVerification) were taking ~18 seconds each because they called `ttnn::gelu()` individually for each of ~65,000 BF16 values.
+
+**Solution:** Batched all BF16 values into a single tensor and call gelu() once:
+1. Collect all valid BF16 values into a vector
+2. Pad to tile boundary (multiple of 32×32=1024)
+3. Create tensor: `Tensor::from_vector(data, TensorSpec).to_device(device)`
+4. Call operation ONCE on the entire tensor
+5. Process results from output vector
+
+**Results:**
+
+| Test | Before | After | Speedup |
+|------|--------|-------|---------|
+| ComprehensiveULPBySegment | ~18s | 0.14s | ~130x |
+| CumulativeULPDistribution | ~18s | 0.14s | ~130x |
+| MonotonicityVerification | ~18s | 0.13s | ~140x |
+| **All 11 GeluUlp tests** | ~54s | 1.8s | **~30x** |
+
+**Key Insight:** The overhead of individual tensor creation, device transfer, and kernel dispatch dominates when testing one value at a time. Batching amortizes this overhead across all values.
+
+**Documentation Added:** Batched testing pattern documented in test_gelu_ulp_bug.cpp header comment for future reference.
+
 ### 2026-01-12: Pre-PR Source Code Cleanup
 
 **Objective:** Clean up kernel headers before creating final PR branch. Remove dead code and add clarifying comments.

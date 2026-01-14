@@ -31,6 +31,16 @@
  * - All polynomial segments have Max ULP = 1
  * - 99.80% of BF16 values have ULP <= 1
  *
+ * BATCHED TESTING PATTERN:
+ * Tests that sweep all ~65,000 BF16 values use batched tensor operations for efficiency:
+ *   1. Collect all valid BF16 values into a vector
+ *   2. Pad to tile boundary (multiple of 32x32=1024)
+ *   3. Create single tensor: Tensor::from_vector(data, TensorSpec).to_device(device)
+ *   4. Call operation ONCE on the entire tensor
+ *   5. Process results from output vector
+ * This achieves ~100x speedup vs calling the operation individually per value.
+ * See ComprehensiveULPBySegment, CumulativeULPDistribution, MonotonicityVerification.
+ *
  * Run: ./build_Debug/test/ttnn/unit_tests_ttnn --gtest_filter="*GeluUlp*"
  */
 
@@ -779,6 +789,9 @@ TEST_F(GeluUlpBugTest, ComprehensiveULPBySegment) {
     // Comprehensive ULP analysis over ALL valid BF16 values
     // Uses DAZ+FTZ model matching Tenstorrent hardware behavior
     // Segments based on the C6 implementation
+    //
+    // PERFORMANCE: Batches all ~65,000 BF16 values into a single tensor and
+    // calls gelu() once, instead of 65,000 individual calls.
 
     struct SegmentStats {
         std::string name;
@@ -807,17 +820,15 @@ TEST_F(GeluUlpBugTest, ComprehensiveULPBySegment) {
         {"Positive sat (x>=3)", 3.0f, std::numeric_limits<float>::max()},
     };
 
-    std::array<uint32_t, 4> dims = {1, 1, 32, 32};
-    ttnn::Shape shape(dims);
-
     std::cout << "\n============================================================\n";
     std::cout << "COMPREHENSIVE ULP ANALYSIS BY SEGMENT (DAZ+FTZ MODEL)\n";
     std::cout << "============================================================\n";
     std::cout << "Using Tenstorrent hardware model: denormals treated as zero\n\n";
 
+    // Step 1: Collect all valid BF16 values (excluding NaN/Inf/Denormals/Zero)
+    std::vector<float> input_values;
     int32_t skipped_denormals = 0;
 
-    // Iterate through all valid BF16 bit patterns (excluding NaN/Inf/Denormals)
     for (uint32_t bits = 0; bits <= 0xFFFF; ++bits) {
         uint16_t bf16_bits = static_cast<uint16_t>(bits);
 
@@ -840,10 +851,57 @@ TEST_F(GeluUlpBugTest, ComprehensiveULPBySegment) {
             continue;
         }
 
-        // Run GELU on device
-        auto tensor = ttnn::full(shape, x, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
-        auto result = ttnn::from_device(ttnn::gelu(tensor, false));
-        float actual = static_cast<float>(result.to_vector<::bfloat16>()[0]);
+        input_values.push_back(x);
+    }
+
+    // Save valid count before padding
+    const size_t valid_count = input_values.size();
+    std::cout << "Collected " << valid_count << " valid BF16 values\n";
+    std::cout << "Skipped " << skipped_denormals << " denormal values (all map to zero)\n\n";
+
+    // Step 2: Pad to tile boundary (multiple of 32*32 = 1024) and create tensor
+    const size_t tile_size = 32 * 32;
+    size_t padded_size = ((valid_count + tile_size - 1) / tile_size) * tile_size;
+    input_values.resize(padded_size, 0.0f);  // Pad with zeros
+
+    // Create tensor shape: [1, 1, num_tiles * 32, 32]
+    uint32_t num_tiles = static_cast<uint32_t>(padded_size / tile_size);
+    std::array<uint32_t, 4> dims = {1, 1, num_tiles * 32, 32};
+
+    // Step 3: Create input tensor from vector of bfloat16
+
+    std::vector<::bfloat16> bf16_inputs;
+    bf16_inputs.reserve(padded_size);
+    for (float x : input_values) {
+        bf16_inputs.push_back(::bfloat16(x));
+    }
+
+    // Create TensorSpec for tile layout with DRAM memory
+    tt::tt_metal::TensorSpec tensor_spec(
+        tt::tt_metal::Shape(dims),
+        tt::tt_metal::TensorLayout(
+            DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), tt::tt_metal::MemoryConfig{}));
+
+    auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
+
+    // Step 4: Run GELU once on the entire tensor
+    auto output_tensor = ttnn::gelu(input_tensor, false);
+    auto output_cpu = ttnn::from_device(output_tensor);
+    auto output_vec = output_cpu.to_vector<::bfloat16>();
+
+    // Reload bf16_inputs for comparison (was moved)
+    bf16_inputs.clear();
+    bf16_inputs.reserve(padded_size);
+    for (float x : input_values) {
+        bf16_inputs.push_back(::bfloat16(x));
+    }
+
+    // Step 5: Process results - use original count before padding
+    // Note: valid_count is number of non-zero valid BF16 values we collected
+
+    for (size_t i = 0; i < valid_count; ++i) {
+        float x = static_cast<float>(bf16_inputs[i]);
+        float actual = static_cast<float>(output_vec[i]);
 
         // Compute expected with DAZ+FTZ applied
         float expected = bf16_ulp::gelu_expected_bf16_daz(x);
@@ -862,8 +920,6 @@ TEST_F(GeluUlpBugTest, ComprehensiveULPBySegment) {
             }
         }
     }
-
-    std::cout << "Skipped " << skipped_denormals << " denormal values (all map to zero)\n\n";
 
     // Print results
     std::cout << std::left << std::setw(25) << "Segment" << std::right << std::setw(10) << "Count" << std::setw(12)
@@ -899,28 +955,26 @@ TEST_F(GeluUlpBugTest, CumulativeULPDistribution) {
     // Comprehensive ULP distribution analysis over ALL valid BF16 values
     // Shows cumulative percentage at various ULP thresholds
     // Uses DAZ+FTZ model matching Tenstorrent hardware behavior
-
-    std::array<uint32_t, 4> dims = {1, 1, 32, 32};
-    ttnn::Shape shape(dims);
+    //
+    // PERFORMANCE: Batches all ~65,000 BF16 values into a single tensor and
+    // calls gelu() once, instead of 65,000 individual calls.
 
     // ULP buckets for cumulative distribution
     std::vector<int32_t> ulp_thresholds = {0, 1, 2, 3, 5, 10, 20, 50, 100, 500, 1000, 10000};
     std::vector<int32_t> ulp_bucket_counts(ulp_thresholds.size(), 0);
 
-    int32_t total_count = 0;
     int32_t max_ulp = 0;
     float worst_x = 0.0f;
     int32_t skipped_denormals = 0;
-
-    // Collect all ULP values
-    std::vector<std::pair<float, int32_t>> all_results;  // (x, ulp)
 
     std::cout << "\n============================================================\n";
     std::cout << "CUMULATIVE ULP DISTRIBUTION (DAZ+FTZ MODEL)\n";
     std::cout << "============================================================\n";
     std::cout << "Using Tenstorrent hardware model: denormals treated as zero\n\n";
 
-    // Iterate through all valid BF16 bit patterns
+    // Step 1: Collect all valid BF16 values (excluding NaN/Inf/Denormals/Zero)
+    std::vector<float> input_values;
+
     for (uint32_t bits = 0; bits <= 0xFFFF; ++bits) {
         uint16_t bf16_bits = static_cast<uint16_t>(bits);
 
@@ -941,17 +995,62 @@ TEST_F(GeluUlpBugTest, CumulativeULPDistribution) {
             continue;
         }
 
-        // Run GELU on device
-        auto tensor = ttnn::full(shape, x, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
-        auto result = ttnn::from_device(ttnn::gelu(tensor, false));
-        float actual = static_cast<float>(result.to_vector<::bfloat16>()[0]);
+        input_values.push_back(x);
+    }
+
+    const size_t valid_count = input_values.size();
+    std::cout << "Collected " << valid_count << " valid BF16 values\n";
+    std::cout << "Skipped " << skipped_denormals << " denormal values\n\n";
+
+    // Step 2: Pad to tile boundary (multiple of 32*32 = 1024) and create tensor
+    const size_t tile_size = 32 * 32;
+    size_t padded_size = ((valid_count + tile_size - 1) / tile_size) * tile_size;
+    input_values.resize(padded_size, 0.0f);  // Pad with zeros
+
+    // Create tensor shape
+    uint32_t num_tiles = static_cast<uint32_t>(padded_size / tile_size);
+    std::array<uint32_t, 4> dims = {1, 1, num_tiles * 32, 32};
+
+    // Step 3: Create input tensor from vector of bfloat16
+    std::vector<::bfloat16> bf16_inputs;
+    bf16_inputs.reserve(padded_size);
+    for (float x : input_values) {
+        bf16_inputs.push_back(::bfloat16(x));
+    }
+
+    // Create TensorSpec for tile layout with DRAM memory
+    tt::tt_metal::TensorSpec tensor_spec(
+        tt::tt_metal::Shape(dims),
+        tt::tt_metal::TensorLayout(
+            DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), tt::tt_metal::MemoryConfig{}));
+
+    auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
+
+    // Step 4: Run GELU once on the entire tensor
+    auto output_tensor = ttnn::gelu(input_tensor, false);
+    auto output_cpu = ttnn::from_device(output_tensor);
+    auto output_vec = output_cpu.to_vector<::bfloat16>();
+
+    // Reload bf16_inputs for comparison (was moved)
+    bf16_inputs.clear();
+    bf16_inputs.reserve(padded_size);
+    for (float x : input_values) {
+        bf16_inputs.push_back(::bfloat16(x));
+    }
+
+    // Step 5: Process results
+    std::vector<std::pair<float, int32_t>> all_results;  // (x, ulp)
+    all_results.reserve(valid_count);
+
+    for (size_t i = 0; i < valid_count; ++i) {
+        float x = static_cast<float>(bf16_inputs[i]);
+        float actual = static_cast<float>(output_vec[i]);
 
         // Compute expected with DAZ+FTZ
         float expected = bf16_ulp::gelu_expected_bf16_daz(x);
         int32_t ulp = bf16_ulp::ulp_distance_bf16_daz(actual, expected);
 
         all_results.push_back({x, ulp});
-        total_count++;
 
         if (ulp > max_ulp) {
             max_ulp = ulp;
@@ -959,17 +1058,17 @@ TEST_F(GeluUlpBugTest, CumulativeULPDistribution) {
         }
 
         // Count into buckets
-        for (size_t i = 0; i < ulp_thresholds.size(); ++i) {
-            if (ulp <= ulp_thresholds[i]) {
-                ulp_bucket_counts[i]++;
+        for (size_t j = 0; j < ulp_thresholds.size(); ++j) {
+            if (ulp <= ulp_thresholds[j]) {
+                ulp_bucket_counts[j]++;
             }
         }
     }
 
-    std::cout << "Skipped " << skipped_denormals << " denormal values\n";
-    std::cout << "Analyzed " << total_count << " normal BF16 values\n\n";
+    int32_t total_count = static_cast<int32_t>(valid_count);
 
     // Print cumulative distribution
+    std::cout << "Analyzed " << total_count << " normal BF16 values\n\n";
     std::cout << "CUMULATIVE DISTRIBUTION:\n";
     std::cout << std::string(50, '-') << "\n";
     std::cout << std::left << std::setw(15) << "ULP <=" << std::right << std::setw(12) << "Count" << std::setw(12)
@@ -1169,9 +1268,9 @@ TEST_F(GeluUlpBugTest, MonotonicityVerification) {
     // NOTE: Due to approximation errors at the asymptotic/polynomial boundary,
     // we allow small ULP tolerance violations. The known worst case is at x=-4.188
     // where Max ULP = 7. Gross monotonicity violations indicate implementation bugs.
-
-    std::array<uint32_t, 4> dims = {1, 1, 32, 32};
-    ttnn::Shape shape(dims);
+    //
+    // PERFORMANCE: Batches all ~65,000 BF16 values into a single tensor and
+    // calls gelu() once, instead of 65,000 individual calls.
 
     std::cout << "\n============================================================\n";
     std::cout << "MONOTONICITY VERIFICATION\n";
@@ -1180,8 +1279,9 @@ TEST_F(GeluUlpBugTest, MonotonicityVerification) {
     std::cout << "GELU should be ascending for x > -0.75\n";
     std::cout << "Small violations at segment boundaries are tolerated.\n\n";
 
-    // Collect all (x, gelu(x)) pairs for non-denormal BF16 values
-    std::vector<std::pair<float, float>> values;
+    // Step 1: Collect all valid BF16 values (excluding NaN/Inf/Denormals)
+    // Note: We include zeros for monotonicity checking
+    std::vector<float> input_values;
 
     for (uint32_t bits = 0; bits <= 0xFFFF; ++bits) {
         uint16_t bf16_bits = static_cast<uint16_t>(bits);
@@ -1198,12 +1298,55 @@ TEST_F(GeluUlpBugTest, MonotonicityVerification) {
         }
 
         float x = bf16_ulp::bf16_bits_to_float(bf16_bits);
+        input_values.push_back(x);
+    }
 
-        // Run GELU on device
-        auto tensor = ttnn::full(shape, x, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
-        auto result = ttnn::from_device(ttnn::gelu(tensor, false));
-        float actual = static_cast<float>(result.to_vector<::bfloat16>()[0]);
+    const size_t valid_count = input_values.size();
+    std::cout << "Collected " << valid_count << " valid BF16 values\n";
 
+    // Step 2: Pad to tile boundary (multiple of 32*32 = 1024) and create tensor
+    const size_t tile_size = 32 * 32;
+    size_t padded_size = ((valid_count + tile_size - 1) / tile_size) * tile_size;
+    input_values.resize(padded_size, 0.0f);  // Pad with zeros
+
+    // Create tensor shape
+    uint32_t num_tiles = static_cast<uint32_t>(padded_size / tile_size);
+    std::array<uint32_t, 4> dims = {1, 1, num_tiles * 32, 32};
+
+    // Step 3: Create input tensor from vector of bfloat16
+    std::vector<::bfloat16> bf16_inputs;
+    bf16_inputs.reserve(padded_size);
+    for (float x : input_values) {
+        bf16_inputs.push_back(::bfloat16(x));
+    }
+
+    // Create TensorSpec for tile layout with DRAM memory
+    tt::tt_metal::TensorSpec tensor_spec(
+        tt::tt_metal::Shape(dims),
+        tt::tt_metal::TensorLayout(
+            DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), tt::tt_metal::MemoryConfig{}));
+
+    auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
+
+    // Step 4: Run GELU once on the entire tensor
+    auto output_tensor = ttnn::gelu(input_tensor, false);
+    auto output_cpu = ttnn::from_device(output_tensor);
+    auto output_vec = output_cpu.to_vector<::bfloat16>();
+
+    // Reload bf16_inputs for comparison (was moved)
+    bf16_inputs.clear();
+    bf16_inputs.reserve(padded_size);
+    for (float x : input_values) {
+        bf16_inputs.push_back(::bfloat16(x));
+    }
+
+    // Step 5: Build (x, gelu(x)) pairs from results
+    std::vector<std::pair<float, float>> values;
+    values.reserve(valid_count);
+
+    for (size_t i = 0; i < valid_count; ++i) {
+        float x = static_cast<float>(bf16_inputs[i]);
+        float actual = static_cast<float>(output_vec[i]);
         values.push_back({x, actual});
     }
 
