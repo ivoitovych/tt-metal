@@ -104,15 +104,24 @@ Root cause hypothesis: The tanh_bw implementation likely computes `1 - tanh(x)^2
 
 ### Steps (exact commands)
 ```bash
-# Build tests
-cd ~/tt/tt-metal
-~/tt/rebuild_ttnn_tests.sh
+# Prerequisites: tt-metal already cloned and built from https://github.com/tenstorrent/tt-metal
+
+cd <your-tt-metal-directory>
+
+# Fetch the test branch and apply changes without committing
+git remote add ivoitovych https://github.com/ivoitovych/tt-metal.git
+git fetch ivoitovych ivoitovych/tanh-bf16-ulp-diagnostic-tests
+git merge --no-commit --squash ivoitovych/ivoitovych/tanh-bf16-ulp-diagnostic-tests
+
+# Build only the affected target
+# (if build fails with "mpfr not found", run: sudo apt-get install libmpfr-dev libgmp-dev)
+cmake --build build_Debug --target unit_tests_ttnn -j$(nproc)
 
 # Run tanh ULP diagnostic tests
 ./build_Debug/test/ttnn/unit_tests_ttnn --gtest_filter="*TanhUlp*:*TanhBwUlp*"
 ```
 
-Test files:
+Test files (included in the merge):
 - C++ tests: `tests/ttnn/unit_tests/gtests/test_tanh_bw_ulp_diagnostic.cpp`
 - Python tests: `tests/ttnn/unit_tests/operations/eltwise/backward/test_tanh_bw_ulp_diagnostic.py`
 
@@ -120,8 +129,9 @@ Test files:
 100% reproducible - affects all values in the transition/saturation region (|x| > 3).
 
 ### Software Versions
-- tt-metal branch: `ivoitovych/tanh-bf16-ulp-diagnostic-tests`
-- Commit: `4023b781b7`
+- tt-metal fork: https://github.com/ivoitovych/tt-metal
+- Branch: `ivoitovych/tanh-bf16-ulp-diagnostic-tests`
+- Commit: `29d08f1478`
 
 ### Hardware Details
 Blackhole P150a
