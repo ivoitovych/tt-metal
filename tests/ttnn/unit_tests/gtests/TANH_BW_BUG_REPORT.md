@@ -98,9 +98,18 @@ Forward:  tanh(x)
 Backward: d/dx tanh(x) = 1 - tanh(x)^2 = sech^2(x)
 ```
 
-Root cause hypothesis: The tanh_bw implementation likely computes `1 - tanh(x)^2` by computing tanh(x) in BF16, squaring, then subtracting from 1. When tanh(x) saturates to exactly ±1.0 in BF16 (around |x| > 4), the computation becomes `1 - 1 = 0`, but the true derivative is non-zero and representable in BF16.
+**Root cause** (verified in source code at `ttnn/cpp/ttnn/operations/eltwise/unary_backward/unary_backward.cpp:287-301`):
 
-**The fix**: Compute the derivative directly using a polynomial approximation for sech^2(x), similar to how the forward tanh uses a polynomial.
+```cpp
+Tensor tanh_res = ttnn::tanh(input, output_mem_config);      // BF16 tanh saturates to ±1.0 for |x| > ~3.4
+tanh_res = ttnn::square(tanh_res, output_mem_config);        // 1.0² = 1.0
+tanh_res = ttnn::rsub(tanh_res, 1.0f, ...);                  // 1.0 - 1.0 = 0.0 ← PRECISION LOSS
+ttnn::multiply(grad, tanh_res, ...);                         // grad * 0 = 0
+```
+
+When `ttnn::tanh(x)` saturates to exactly ±1.0 in BF16, the subsequent `1 - tanh²` computation yields exactly 0, even though the true derivative (e.g., 0.0013 at x=4) is representable in BF16.
+
+**Suggested fix**: Compute sech²(x) directly using a dedicated kernel or polynomial approximation that handles the saturation region correctly, rather than relying on `1 - tanh(x)²`.
 
 ### Steps (exact commands)
 ```bash
@@ -130,7 +139,7 @@ Test files (included in the merge):
 
 ### Software Versions
 - tt-metal base: https://github.com/tenstorrent/tt-metal commit `78fc90f44b`
-- Test branch: https://github.com/ivoitovych/tt-metal branch `ivoitovych/tanh-bf16-ulp-diagnostic-tests`
+- Test branch: https://github.com/ivoitovych/tt-metal/tree/ivoitovych/tanh-bf16-ulp-diagnostic-tests
 - OS: Ubuntu 22.04.5 LTS, Kernel 5.15.0-164-generic
 - Python: 3.10.12
 
@@ -140,7 +149,9 @@ Test files (included in the merge):
 - Firmware: 19.1.0
 
 ### Is this a regression?
-Unknown - prior tanh_bw tests (`tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_tanh.py`) use PCC comparison and only test the narrow range `[-1.45, 1.45]`, avoiding the saturation region where this bug manifests.
+Unknown
+
+Note: Prior tanh_bw tests (`tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_tanh.py`) use PCC comparison and only test the narrow range `[-1.45, 1.45]`, avoiding the saturation region where this bug manifests.
 
 ### Priority
 P1
