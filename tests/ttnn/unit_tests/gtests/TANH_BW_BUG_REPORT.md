@@ -129,15 +129,18 @@ Test files (included in the merge):
 100% reproducible - affects all values in the transition/saturation region (|x| > 3).
 
 ### Software Versions
-- tt-metal fork: https://github.com/ivoitovych/tt-metal
-- Branch: `ivoitovych/tanh-bf16-ulp-diagnostic-tests`
-- Commit: `29d08f1478`
+- tt-metal base: https://github.com/tenstorrent/tt-metal commit `78fc90f44b`
+- Test branch: https://github.com/ivoitovych/tt-metal branch `ivoitovych/tanh-bf16-ulp-diagnostic-tests`
+- OS: Ubuntu 22.04.5 LTS, Kernel 5.15.0-164-generic
+- Python: 3.10.12
 
 ### Hardware Details
-Blackhole P150a
+- Device: Blackhole P150a
+- Driver: TT-KMD 2.6.1-pre
+- Firmware: 19.1.0
 
 ### Is this a regression?
-Unknown - no prior ULP diagnostic tests existed for tanh_bw.
+Unknown - prior tanh_bw tests (`tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_tanh.py`) use PCC comparison and only test the narrow range `[-1.45, 1.45]`, avoiding the saturation region where this bug manifests.
 
 ### Priority
 P1
