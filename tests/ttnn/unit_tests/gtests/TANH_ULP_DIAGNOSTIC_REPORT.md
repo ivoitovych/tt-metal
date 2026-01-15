@@ -252,5 +252,5 @@ The high Max ULP in tanh_bw occurs in the saturation region where the derivative
 ---
 
 *Report generated: January 2026*
-*Hardware: Wormhole B0*
+*Hardware: Blackhole P150a*
 *Software: TT-Metal (Debug build)*

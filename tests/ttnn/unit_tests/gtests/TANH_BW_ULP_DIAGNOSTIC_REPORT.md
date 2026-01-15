@@ -172,5 +172,5 @@ All 127 positive denormal inputs correctly produce derivative = 1.0:
 ---
 
 *Report generated: January 2026*
-*Hardware: Wormhole N150*
+*Hardware: Blackhole P150a*
 *Software: TT-Metal (Debug build)*

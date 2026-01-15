@@ -752,8 +752,9 @@ TEST_F(TanhBwUlpDeviceTest, PerSegmentAnalysis) {
     std::cout << "\nDerivative Behavior: tanh'(x) = 1 - tanh(x)^2 = sech^2(x)\n";
     std::cout << "  - Near zero: derivative = 1.0 (excellent precision)\n";
     std::cout << "  - Transition region: derivative decreases from 1 to 0\n";
-    std::cout << "  - Saturation: BF16 tanh saturates to +/-1, causing 1-1=0 exactly\n";
-    std::cout << "\nHigh ULP in saturation region is due to BF16 precision limits.\n";
+    std::cout << "  - Saturation region (|x| > 3): IMPLEMENTATION BUG - produces 0 instead of correct small values\n";
+    std::cout << "\nNOTE: High ULP in saturation is an implementation bug, NOT a BF16 limitation.\n";
+    std::cout << "      The forward tanh achieves Max ULP = 1, proving correct implementation is possible.\n";
 }
 
 TEST_F(TanhBwUlpDeviceTest, DenormalInputsProduceDerivativeOne) {

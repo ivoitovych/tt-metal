@@ -1,20 +1,19 @@
 # Bug Report: ttnn::tanh_bw has catastrophic ULP errors
 
-## Component / Area
+### Component / Area
 TTNN / Eltwise Backward Operations / tanh_bw
 
-## Issue Type
+### Issue Type (optional)
 Bad Outputs
 
-## Summary
+### Observed
+`ttnn::tanh_bw` produces Max ULP = 15,139 with mean ULP = 155.59.
 
 The `ttnn::tanh_bw` operation produces catastrophically incorrect results in the transition and saturation regions, with **Max ULP = 15,139** compared to the mathematically correct reference. This is an implementation bug, not a BF16 format limitation.
 
 **Proof**: The forward `ttnn::tanh` operation achieves **Max ULP = 1** across the entire BF16 range using the same testing methodology, demonstrating that correct implementation is achievable.
 
-## Observed
-
-`ttnn::tanh_bw` produces Max ULP = 15,139 with mean ULP = 155.59:
+Per-segment analysis:
 
 ```
 TANH_BW PER-SEGMENT ULP ANALYSIS
@@ -44,7 +43,7 @@ x >= 10                  15968     12686      137.27     98.3%     98.3%     98.
 ------------------------------------------------------------------------------------------------
 ```
 
-### Specific failure examples:
+Specific failure examples:
 
 | Input x | Expected Output | Actual Output | ULP Error |
 |---------|-----------------|---------------|-----------|
@@ -55,11 +54,10 @@ x >= 10                  15968     12686      137.27     98.3%     98.3%     98.
 
 **Note**: Values like 0.0049, 0.0013, 0.0002 are perfectly representable in BF16. The implementation is producing incorrect zeros.
 
-## Expected
-
+### Expected
 `ttnn::tanh_bw` should achieve precision comparable to `ttnn::tanh` (Max ULP <= 2).
 
-**Reference**: The forward `ttnn::tanh` achieves Max ULP = 1:
+The forward `ttnn::tanh` achieves Max ULP = 1:
 
 ```
 TANH (FORWARD) PER-SEGMENT ULP ANALYSIS
@@ -87,38 +85,24 @@ x >= 10                  15968         0        0.00    100.0%    100.0%    100.
 ------------------------------------------------------------------------------------------------
 ```
 
+| Operation | Max ULP | Mean ULP | % Within 1 ULP | % Within 2 ULP |
+|-----------|---------|----------|----------------|----------------|
+| tanh (forward) | **1** | **0.047** | **100%** | **100%** |
+| tanh_bw (backward) | 15,139 | 155.59 | 97.97% | 98.11% |
+
 This demonstrates that correct BF16 implementation IS achievable for tanh-family functions.
 
-## Mathematical Background
-
+Mathematical background:
 ```
 Forward:  tanh(x)
 Backward: d/dx tanh(x) = 1 - tanh(x)^2 = sech^2(x)
 ```
 
-The backward function computes the derivative. For the ULP tests, we use `grad_output = 1.0` to isolate the derivative calculation:
-```
-tanh_bw(grad_output=1.0, input=x) = 1.0 * (1 - tanh(x)^2) = sech^2(x)
-```
+Root cause hypothesis: The tanh_bw implementation likely computes `1 - tanh(x)^2` by computing tanh(x) in BF16, squaring, then subtracting from 1. When tanh(x) saturates to exactly ±1.0 in BF16 (around |x| > 4), the computation becomes `1 - 1 = 0`, but the true derivative is non-zero and representable in BF16.
 
-## Root Cause Hypothesis
+**The fix**: Compute the derivative directly using a polynomial approximation for sech^2(x), similar to how the forward tanh uses a polynomial.
 
-The tanh_bw implementation likely computes `1 - tanh(x)^2` by:
-1. Computing tanh(x) in BF16
-2. Squaring the result
-3. Subtracting from 1
-
-When tanh(x) saturates to exactly ±1.0 in BF16 (which happens around |x| > 4), the computation becomes:
-```
-1 - 1.0^2 = 1 - 1 = 0   (exact in BF16)
-```
-
-But the true derivative at x=4 is approximately 0.0013, which IS representable in BF16.
-
-**The fix**: Compute the derivative directly using a polynomial approximation for sech^2(x), similar to how the forward tanh uses a polynomial. Do not rely on `1 - tanh(x)^2` which amplifies the saturation error.
-
-## Steps to Reproduce
-
+### Steps (exact commands)
 ```bash
 # Build tests
 cd ~/tt/tt-metal
@@ -128,44 +112,28 @@ cd ~/tt/tt-metal
 ./build_Debug/test/ttnn/unit_tests_ttnn --gtest_filter="*TanhUlp*:*TanhBwUlp*"
 ```
 
-## Test Files
-
+Test files:
 - C++ tests: `tests/ttnn/unit_tests/gtests/test_tanh_bw_ulp_diagnostic.cpp`
 - Python tests: `tests/ttnn/unit_tests/operations/eltwise/backward/test_tanh_bw_ulp_diagnostic.py`
 
-## Frequency
-
+### Frequency
 100% reproducible - affects all values in the transition/saturation region (|x| > 3).
 
-## Software Versions
-
+### Software Versions
 - tt-metal branch: `ivoitovych/tanh-bf16-ulp-diagnostic-tests`
 - Commit: `4023b781b7`
 
-## Hardware Details
+### Hardware Details
+Blackhole P150a
 
-- Wormhole N150
-
-## Is this a regression?
-
+### Is this a regression?
 Unknown - no prior ULP diagnostic tests existed for tanh_bw.
 
-## Priority
+### Priority
+P1
 
-P1 - Training accuracy is affected by incorrect gradients in tanh layers.
-
-## Impact
-
+### Impact
 Incorrect gradients during backpropagation for any model using tanh activation. This can cause:
 - Slower or failed convergence during training
 - Incorrect weight updates
 - Degraded model quality
-
-## Comparison Summary
-
-| Operation | Max ULP | Mean ULP | % Within 1 ULP | % Within 2 ULP |
-|-----------|---------|----------|----------------|----------------|
-| tanh (forward) | **1** | **0.047** | **100%** | **100%** |
-| tanh_bw (backward) | 15,139 | 155.59 | 97.97% | 98.11% |
-
-The forward tanh demonstrates that excellent BF16 precision IS achievable. The backward implementation needs to be fixed to match this quality.
