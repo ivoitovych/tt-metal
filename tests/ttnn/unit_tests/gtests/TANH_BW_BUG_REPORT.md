@@ -98,7 +98,9 @@ Forward:  tanh(x)
 Backward: d/dx tanh(x) = 1 - tanh(x)^2 = sech^2(x)
 ```
 
-**Root cause** (verified in source code at `ttnn/cpp/ttnn/operations/eltwise/unary_backward/unary_backward.cpp:287-301`):
+**Root cause** (verified in source code):
+
+The TTNN implementation (`ttnn/cpp/ttnn/operations/eltwise/unary_backward/unary_backward.cpp:287-301`) chains high-level ops:
 
 ```cpp
 Tensor tanh_res = ttnn::tanh(input, output_mem_config);      // BF16 tanh saturates to ±1.0 for |x| > ~3.4
@@ -107,9 +109,16 @@ tanh_res = ttnn::rsub(tanh_res, 1.0f, ...);                  // 1.0 - 1.0 = 0.0 
 ttnn::multiply(grad, tanh_res, ...);                         // grad * 0 = 0
 ```
 
-When `ttnn::tanh(x)` saturates to exactly ±1.0 in BF16, the subsequent `1 - tanh²` computation yields exactly 0, even though the true derivative (e.g., 0.0013 at x=4) is representable in BF16.
+Note: An SFPU kernel for tanh derivative exists (`tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_tanh_derivative.h`) but has the same bug at line 29:
+```cpp
+val = val * (-val) + vConst1;  // 1 - tanh(x)² - same precision loss
+```
 
-**Suggested fix**: Compute sech²(x) directly using a dedicated kernel or polynomial approximation that handles the saturation region correctly, rather than relying on `1 - tanh(x)²`.
+When `tanh(x)` saturates to exactly ±1.0 in BF16, the `1 - tanh²` computation yields exactly 0, even though the true derivative (e.g., 0.0013 at x=4) is representable in BF16.
+
+**Why forward tanh works**: The forward tanh (`ckernel_sfpu_tanh.h:47-77`) uses a **polynomial approximation** (Sollya-generated coefficients) that directly computes tanh(x) without intermediate saturation, achieving Max ULP = 1.
+
+**Suggested fix**: Create a similar polynomial or continued fraction approximation for sech²(x) that directly computes the derivative without relying on `1 - tanh(x)²`.
 
 ### Steps (exact commands)
 ```bash
