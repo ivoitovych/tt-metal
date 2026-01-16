@@ -45,11 +45,17 @@ add_library(TTNN::Test::Basic ALIAS unit_tests_ttnn_basic)
 TT_ENABLE_UNITY_BUILD(unit_tests_ttnn_basic)
 target_sources(unit_tests_ttnn_basic PRIVATE ${UNIT_TESTS_TTNN_BASIC_SOURCES})
 target_include_directories(unit_tests_ttnn_basic PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+# Find MPFR for high-precision reference implementations in ULP diagnostic tests
+find_library(MPFR_LIBRARY mpfr REQUIRED)
+find_library(GMP_LIBRARY gmp REQUIRED)
+
 target_link_libraries(
     unit_tests_ttnn_basic
     PRIVATE
         test_common_libs
         TTNN::CPP
+        ${MPFR_LIBRARY}
+        ${GMP_LIBRARY}
 )
 target_precompile_headers(unit_tests_ttnn_basic REUSE_FROM TTNN::PCH)
 
