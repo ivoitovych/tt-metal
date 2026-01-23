@@ -1,11 +1,11 @@
 # Bug Report: ttnn::untilize Data Corruption on Blackhole P150
 
-**Status**: ONGOING INVESTIGATION - Interface 0-specific bug at z=1, y≥5
+**Status**: ALL DEVICE TILE OPERATIONS BROKEN - Only CPU-based workarounds work
 **Severity**: Critical
-**Component**: tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_pack_untilize.h
+**Component**: tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib/ (pack_untilize.h, unpack_untilize.h, pack_tilize.h)
 **Hardware**: Blackhole P150
 **Branch**: `ivoitovych/tt-train-untilize-blackhole-bug-2`
-**Date**: 2025-12-28 (Updated - Session 13)
+**Date**: 2025-12-29 (Updated - Session 16)
 
 ---
 
@@ -13,15 +13,38 @@
 
 The `ttnn::untilize` operation produces corrupted output data when converting tensors from TILE layout to ROW_MAJOR layout on Blackhole P150 hardware. The corruption manifests as a progressive "read even, skip odd" pattern starting at row 3, with severity increasing for later rows. This bug does **not** occur on Wormhole hardware.
 
-**WORKAROUND AVAILABLE (2025-12-17)**: A working workaround has been found! Use `ttnn::untilize(tensor, std::nullopt, true, false)` (set `use_pack_untilize=false`) to use the slow path which produces correct results.
+**⚠️ SESSION 16 UPDATE (2025-12-29): BOTH FAST AND SLOW PATHS ARE BROKEN!**
+
+The previous workaround (`use_pack_untilize=False`) does NOT work. All device tile operations are affected:
+- `ttnn.untilize` fast path (`llk_pack_untilize`) - BROKEN
+- `ttnn.untilize` slow path (`llk_unpack_untilize` + `llk_pack`) - BROKEN
+- `ttnn.tilize` (`llk_pack_tilize`) - BROKEN
+- `ttnn.to_layout` on device - BROKEN
+
+**WORKING WORKAROUNDS (CPU-based only):**
+```python
+# For untilize - use implicit CPU untilize via to_torch:
+result = ttnn.to_torch(tile_tensor)  # Works correctly!
+
+# For untilize - or move to host first:
+host_tensor = ttnn.from_device(device_tensor)
+row_major = ttnn.to_layout(host_tensor, ttnn.ROW_MAJOR_LAYOUT)
+
+# For tilize - do on CPU, then transfer:
+cpu_tiled = ttnn.from_torch(data, layout=ttnn.TILE_LAYOUT)  # CPU tilize
+device_tensor = ttnn.to_device(cpu_tiled, device)
+```
 
 Key findings:
-1. **WORKAROUND FOUND**: The "slow path" (`use_pack_untilize=False`) uses `llk_unpack_untilize` + regular `llk_pack` instead of `llk_pack_untilize` and produces correct results
-2. **BFloat16 precision was masking the real bug**: Initial "corruption" pattern (300→300, 301→300) was actually BFloat16 precision loss, not corruption
-3. **Real bug (Float32)**: Fast path shows face interleaving corruption - data from adjacent rows incorrectly mixed into wrong face positions
-4. **Second bug identified**: `ttnn::argmax` fails on untilized tensors for rows ≥ 21 (separate issue)
-5. **`program_packer_untilized_destination` is EMPTY on Blackhole** - the entire function body is commented out
-6. **Both DST_ACCESS_STRIDED_MODE and DST_ACCESS_NORMAL_MODE produce identical corruption** - ruling out DST access mode as the cause
+1. **ROOT CAUSE (Session 14)**: The SETADCXY/SETADC instruction that sets Y counter in DST_ACCESS_STRIDED_MODE has a bug - after setting Y, exactly 5 Y increments later, X-axis addressing breaks with "duplicate even, skip odd" pattern
+2. **ALL DEVICE TILE OPS BROKEN (Session 16)**: The slow path (`use_pack_untilize=False`) is also broken with identical corruption pattern. Same bug affects `llk_pack_untilize`, `llk_unpack_untilize`, and `llk_pack_tilize`.
+3. **BFloat16 precision was masking the real bug**: Initial "corruption" pattern (300→300, 301→300) was actually BFloat16 precision loss, not corruption
+4. **Real bug (Float32)**: Fast path shows face interleaving corruption - data from adjacent rows incorrectly mixed into wrong face positions
+5. **Second bug identified**: `ttnn::argmax` fails on untilized tensors for rows ≥ 21 (separate issue)
+6. **`program_packer_untilized_destination` is EMPTY on Blackhole** - the entire function body is commented out
+7. **Both DST_ACCESS_STRIDED_MODE and DST_ACCESS_NORMAL_MODE produce identical corruption** - ruling out DST access mode as the cause
+8. **Y SET vs Y INCREMENT**: Using INCADCXY (increment) instead of SETADCXY does NOT trigger the bug
+9. **CPU-based operations work correctly**: `to_torch` implicit untilize, `from_device` + `to_layout` on host, `from_torch` with TILE_LAYOUT
 
 ---
 
@@ -362,6 +385,8 @@ This missing configuration is likely a significant contributor to the corruption
 
 ## Session 5: Workaround Discovery (2025-12-17)
 
+**⚠️ UPDATE (Session 16): The slow path workaround described below NO LONGER WORKS. See Session 16 for current status.**
+
 ### BFloat16 Precision Masking the Real Bug
 
 The original "corruption" pattern observed with BFloat16 data was **NOT actually corruption** - it was BFloat16 precision loss:
@@ -384,35 +409,45 @@ Actual Row 0:   [0-15], [100-115], [32-47], [132-147]
 - Rows 3 and 7 have ZEROS in second half (data missing)
 - 288 out of 512 values incorrect in 8x64 tensor test
 
-### WORKAROUND: Slow Path Works!
+### ~~WORKAROUND: Slow Path Works!~~ (INVALIDATED - See Session 16)
 
-**`ttnn::untilize(tensor, std::nullopt, true, false)` produces CORRECT results!**
+**⚠️ This workaround was invalidated in Session 16.** The slow path also produces 176 errors for 32x32 tensors.
 
-Test with 8x64 Float32 tensor:
-- Fast path (`use_pack_untilize=true`): 288/512 mismatches
-- Slow path (`use_pack_untilize=false`): **0/512 mismatches**
+~~**`ttnn::untilize(tensor, std::nullopt, true, false)` produces CORRECT results!**~~
 
-The slow path uses `llk_unpack_untilize` + regular `llk_pack` instead of the buggy `llk_pack_untilize`.
+~~Test with 8x64 Float32 tensor:~~
+~~- Fast path (`use_pack_untilize=true`): 288/512 mismatches~~
+~~- Slow path (`use_pack_untilize=false`): **0/512 mismatches**~~
 
-### C++ API Usage
+The slow path uses `llk_unpack_untilize` + regular `llk_pack` instead of `llk_pack_untilize`. However, Session 16 testing revealed that `llk_unpack_untilize` has the same Y counter bug affecting rows 21-31.
+
+### C++ API Usage (OUTDATED - See Session 16)
+
+**⚠️ The slow path workaround below no longer works. Use CPU-based workarounds from Session 16.**
 
 ```cpp
-// CORRECT: Use slow path on Blackhole
-auto untilized = ttnn::untilize(tensor, std::nullopt, true, false);
-//                                       memory_config, multicore, use_pack_untilize=FALSE
+// ⚠️ BOTH ARE BROKEN on Blackhole:
+auto untilized = ttnn::untilize(tensor, std::nullopt, true, false);  // Slow path - BROKEN
+auto untilized = ttnn::untilize(tensor);  // Fast path - BROKEN
 
-// BUGGY: Default fast path (corrupts data on Blackhole)
-auto untilized = ttnn::untilize(tensor);  // use_pack_untilize defaults to true
+// ✅ WORKING: Use CPU-based workarounds (see Session 16)
+auto result = ttml::core::to_vector(tile_tensor);  // Implicit CPU untilize via to_torch
 ```
 
-### Python API Usage
+### Python API Usage (OUTDATED - See Session 16)
+
+**⚠️ The slow path workaround below no longer works. Use CPU-based workarounds from Session 16.**
 
 ```python
-# CORRECT: Use slow path on Blackhole
-untilized = ttnn.untilize(tensor, use_pack_untilize=False)
+# ⚠️ BOTH ARE BROKEN on Blackhole:
+untilized = ttnn.untilize(tensor, use_pack_untilize=False)  # Slow path - BROKEN
+untilized = ttnn.untilize(tensor)  # Fast path - BROKEN
 
-# BUGGY: Default fast path
-untilized = ttnn.untilize(tensor)  # use_pack_untilize defaults to True
+# ✅ WORKING: Use CPU-based workarounds
+result = ttnn.to_torch(tile_tensor)  # Implicit CPU untilize - WORKS!
+# Or: move to host first
+host_tensor = ttnn.from_device(device_tensor)
+row_major = ttnn.to_layout(host_tensor, ttnn.ROW_MAJOR_LAYOUT)
 ```
 
 ### SECOND BUG: Argmax on Untilized Tensor
@@ -541,41 +576,71 @@ addr_mod_pack_t {
 
 ## Recommendations
 
-### Status: WORKAROUND AVAILABLE
+### Status: ALL DEVICE TILE OPERATIONS BROKEN (Session 16 Update)
 
-A working workaround has been found! The fast path bug still needs to be fixed for performance, but production code can use the slow path.
+**⚠️ The previous slow path workaround (`use_pack_untilize=False`) no longer works.**
 
-### Immediate Workaround
+Session 16 testing revealed that ALL device tile operations on Blackhole are broken:
+- `ttnn.untilize` fast path (pack_untilize) - 176 errors for 32x32
+- `ttnn.untilize` slow path (unpack_untilize + pack) - 176 errors for 32x32
+- `ttnn.tilize` (pack_tilize) - 176 errors for 32x32
+- `ttnn.to_layout` on device - 176 errors for 32x32
 
-**Use `use_pack_untilize=false` in all `ttnn::untilize` calls on Blackhole:**
+### Working Workarounds (CPU-based only)
 
-```cpp
-// C++
-auto untilized = ttnn::untilize(tensor, std::nullopt, true, false);
-```
-
+**For untilize - use implicit CPU untilize via to_torch:**
 ```python
 # Python
-untilized = ttnn.untilize(tensor, use_pack_untilize=False)
+result = ttnn.to_torch(tile_tensor)  # CPU does the untilize - WORKS!
+
+# C++
+auto vec = ttml::core::to_vector(tile_tensor);  # Uses to_torch internally
 ```
 
-This uses the slow path (`llk_unpack_untilize` + regular `llk_pack`) which produces correct results.
+**For untilize - or move to host first:**
+```python
+# Python
+host_tensor = ttnn.from_device(device_tensor)
+row_major = ttnn.to_layout(host_tensor, ttnn.ROW_MAJOR_LAYOUT)
+
+# C++
+auto host_tensor = ttnn::from_device(device_tensor);
+auto row_major = ttnn::to_layout(host_tensor, ttnn::Layout::ROW_MAJOR);
+```
+
+**For tilize - do on CPU, then transfer:**
+```python
+# Python
+cpu_tiled = ttnn.from_torch(data, layout=ttnn.TILE_LAYOUT)  # CPU tilize
+device_tensor = ttnn.to_device(cpu_tiled, device)
+
+# C++
+auto cpu_tiled = ttnn::from_torch(data, ttnn::float32, ttnn::TILE_LAYOUT);
+auto device_tensor = ttnn::to_device(cpu_tiled, device);
+```
 
 ### Performance Impact
 
-The slow path has higher latency than the optimized `llk_pack_untilize` fast path. For performance-critical applications, the fast path bug should still be fixed. Consider making `use_pack_untilize=False` the **default for Blackhole** until the fast path is fixed.
+The CPU-based workarounds have significant performance overhead due to:
+- Data transfer from device to host (for untilize)
+- Data transfer from host to device (for tilize)
+- CPU-based tile format conversion
 
-### Required Actions (Still Needed for Performance Fix)
+This is a critical bug that blocks high-performance training on Blackhole.
 
-1. **File Bug with Tenstorrent LLK/Hardware Team** (Priority: MEDIUM - workaround available)
+### Required Actions (Priority: CRITICAL)
+
+1. **File Bug with Tenstorrent LLK/Hardware Team** (Priority: CRITICAL - no device-based workaround)
+   - ALL device tile operations are broken: pack_untilize, unpack_untilize, pack_tilize
+   - Same Y counter bug (Y SET + 5 increments) affects all three operations
    - The `program_packer_untilized_destination` function is completely empty on Blackhole
    - The Wormhole approach cannot be directly ported without causing device hang
    - Request documentation on Blackhole-specific packer architecture differences
-   - Request guidance on how `llk_pack_untilize` should be implemented for Blackhole
 
-2. **Consider Platform-Specific Default**
-   - Make `use_pack_untilize=False` the default for Blackhole hardware
-   - Keep `use_pack_untilize=True` as default for Wormhole where it works correctly
+2. **Investigate Common Root Cause**
+   - All three operations likely share the same strided mode addressing bug
+   - Y SET operation in DST_ACCESS_STRIDED_MODE triggers corruption after 5 increments
+   - Same corruption pattern (duplicate even, skip odd) at same rows (21-31)
 
 3. **Investigate Second Bug (argmax on untilized tensors)**
    - `ttnn::argmax` fails on untilized tensors for rows ≥ 21
@@ -586,7 +651,10 @@ The slow path has higher latency than the optimized `llk_pack_untilize` fast pat
 
 | Bug | Description | Workaround |
 |-----|-------------|------------|
-| pack_untilize corruption | Face interleaving corruption on Blackhole fast path | Use `use_pack_untilize=False` |
+| pack_untilize corruption | Y counter bug at z=1, y≥5 on Blackhole | Use `to_torch` (CPU untilize) |
+| unpack_untilize corruption | Same Y counter bug affects slow path | Use `to_torch` (CPU untilize) |
+| pack_tilize corruption | Same Y counter bug affects tilize | Use `from_torch` with TILE_LAYOUT (CPU tilize) |
+| to_layout on device | Same corruption on device | Use `from_device` + `to_layout` on host |
 | argmax on untilized | Fails for rows ≥ 21 on untilized tensors | Round-trip through CPU |
 
 ---
@@ -685,7 +753,9 @@ These values (e.g., 3201515335) are the result of argmax operating on corrupted 
 | 2025-12-17 | Investigation Team | **Session 6**: Started fixing fast path instead of using workaround. |
 | 2025-12-18 | Investigation Team | **Session 7-8**: Partial fix achieved - dual L1 addresses + set_packer_strides makes face pair 0 work. Face pair 1 rows 21-31 still corrupted. DST_ACCESS_STRIDED_MODE confirmed required for multi-tile cases. |
 | 2025-12-27 | Investigation Team | **Session 9-10**: Exhaustive testing of all remaining software fixes. All failed. Strong evidence points to Blackhole packer hardware bug for counter combination z=1, y>=5. Status changed to LIKELY HARDWARE BUG. |
-| 2025-12-28 | Investigation Team | **Session 13**: Key discovery - corruption is INTERFACE 0 SPECIFIC at z=1! Only 176 errors = 11 rows × 16 cols = interface 0 only. Interface 1 works correctly at z=1. Tested ch1 counter sync (failed - made worse) and 8-row model (no effect). Status changed to ONGOING INVESTIGATION. |
+| 2025-12-28 | Investigation Team | **Session 13**: Key discovery - corruption is INTERFACE 0 SPECIFIC at z=1! Only 176 errors = 11 rows × 16 cols = interface 0 only. Interface 1 works correctly at z=1. Tested ch1 counter sync (failed - made worse) and 8-row model (no effect). |
+| 2025-12-28 | Investigation Team | **Session 14**: **ROOT CAUSE FOUND!** Y SET operation (SETADCXY/SETADC) in DST_ACCESS_STRIDED_MODE triggers bug after 5 Y increments. Evidence: (1) Y=1 shifts corruption from row 21 to row 22, (2) INCADCXY produces no corruption, (3) processing z=1 first produces correct data. Status changed to ROOT CAUSE IDENTIFIED. |
+| 2025-12-29 | Investigation Team | **Session 16**: **ALL DEVICE TILE OPS BROKEN!** Discovered slow path (`use_pack_untilize=False`) also has 176 errors. Same bug affects `llk_pack_untilize`, `llk_unpack_untilize`, and `llk_pack_tilize`. Only CPU-based workarounds work: `to_torch` implicit untilize, `from_device` + `to_layout`, `from_torch` with TILE_LAYOUT. Status changed to ALL DEVICE TILE OPERATIONS BROKEN. |
 
 ---
 
@@ -805,4 +875,158 @@ The issue is NOT a general hardware bug - it's specific to interface 0's DEST ad
 3. Compare regular llk_pack with untilize=true (which works correctly)
 4. Look for interface-specific DEST offset calculations
 
-### Status: Ongoing investigation - interface 0-specific issue at z=1, y≥5
+---
+
+## Session 14 Updates: ROOT CAUSE IDENTIFIED (2025-12-28)
+
+### Major Discovery: Y SET Operation Triggers Bug
+
+**Root Cause**: The SETADCXY/SETADC instruction that sets the Y counter to any value in DST_ACCESS_STRIDED_MODE has a bug. After the SET operation, exactly **5 Y increments later**, the strided mode addressing breaks with a "duplicate even, skip odd" pattern.
+
+### Evidence
+
+| Test | Y Operation | Corruption Start | Notes |
+|------|-------------|-----------------|-------|
+| Baseline | SET Y=0 | Row 21 (y=5) | Standard case |
+| Y=1 start | SET Y=1 | Row 22 (y=6) | Shifted by exactly 1 |
+| Increment only | INCADCXY | None | Wrong rows but correct data |
+| Face pair 1 first | No SET | None | Process z=1 first → correct data |
+
+### Detailed Experiments
+
+**Test 1: Y=1 instead of Y=0**
+```
+Row 16: [1700, 1701, 1702, ...] - CORRECT consecutive values (just offset by 1 row)
+Row 17: [1800, 1801, 1802, ...] - CORRECT consecutive values
+...
+Row 22: "skip odd" corruption starts (was row 21 with Y=0)
+```
+The corruption shifted by exactly 1 row when Y start value changed from 0 to 1.
+
+**Test 2: Process face pair 1 FIRST (no Y reset)**
+```
+Row 0 (output): [1600, 1601, 1602, ...] - CORRECT consecutive values from DEST row 16!
+```
+No "skip odd" corruption when z=1 was processed first without preceding Y reset.
+
+**Test 3: Y increment instead of SET**
+```
+Row 16: [1716, 1717, 1718, ...] - CORRECT consecutive values (wrong row but no skip odd)
+Row 17: [1816, 1817, 1818, ...] - CORRECT consecutive values
+```
+No corruption at all when using INCADCXY instead of SETADCXY.
+
+### Bug Mechanism
+
+1. **Mechanism**: When Y counter is SET (not incremented) to any value, some internal strided mode state doesn't properly update
+2. **Trigger**: After exactly 5 Y increments following a SET, X-axis addressing breaks
+3. **Effect**: X counter reads same value twice ("duplicate even, skip odd" pattern)
+4. **Internal state hypothesis**: The DST_ACCESS_STRIDED_MODE has an internal state variable for Y position tracking that becomes corrupted after a SET operation
+
+### Why Wormhole Avoids This Bug
+
+Wormhole's implementation never explicitly resets the Y counter mid-operation:
+- Uses `y_src.incr=15` in addr_mod combined with `INCADCXY(+1)` = 16 for face transitions
+- Different MOP structure with explicit C++ row loop that doesn't require counter resets
+- Counter transitions happen through increment arithmetic, not SET operations
+
+### Fix Attempts (All Failed)
+
+1. **Y=1 with z_stride compensation** - Set Y=1, adjust z_stride from 1024 to 992 to compensate
+   - Result: Partial success for single tile, failed for multi-tile
+
+2. **Both channel z_stride update** - Updated z_stride for both CH_0 and CH_1
+   - Result: Multi-tile issues persist
+
+3. **Y SET for both channels** - Added ch1 Y SET and Z increment
+   - Result: MUCH WORSE - all zeros for face pair 1
+
+### Recommendations
+
+1. **Report to Tenstorrent**: The Y SET operation (SETADCXY/SETADC) in DST_ACCESS_STRIDED_MODE has a bug that causes address corruption after exactly 5 increments
+
+2. **Potential HW fix approaches**:
+   - If there's a way to configure strided mode to use Y increment wraparound instead of Y reset
+   - Wormhole-style y_src.incr=15 with INCADCXY for face transitions (avoids Y SET entirely)
+
+3. ~~**SW workaround**: Use `use_pack_untilize=False` which takes the slow path through unpack+pack~~ **⚠️ INVALIDATED (Session 16)**: The slow path is also broken with the same bug!
+
+### Status (Session 14): ROOT CAUSE IDENTIFIED - Y SET operation in DST_ACCESS_STRIDED_MODE triggers bug after 5 Y increments
+
+---
+
+## Session 16 Updates: ALL DEVICE TILE OPERATIONS BROKEN (2025-12-29)
+
+### Critical Discovery: Slow Path Also Broken
+
+Session 16 testing revealed that the previous workaround (`use_pack_untilize=False`) does NOT work. The slow path shows identical corruption to the fast path:
+
+| Path | Operation | 32x32 Errors | 32x64 Errors |
+|------|-----------|--------------|--------------|
+| Fast | pack_untilize | 176 | 360 |
+| Slow | unpack_untilize + pack | 176 | 360 |
+| Tilize | pack_tilize | 176 | N/A |
+| to_layout | device conversion | 176 | N/A |
+
+All device tile operations have the same "duplicate even, skip odd" corruption pattern at rows 21-31.
+
+### Root Cause Extends to All LLK Tile Operations
+
+The Y SET bug in DST_ACCESS_STRIDED_MODE affects:
+1. `llk_pack_untilize` (fast path untilize)
+2. `llk_unpack_untilize` (slow path untilize)
+3. `llk_pack_tilize` (tilize operation)
+
+All three operations use the same strided mode addressing with Y counter manipulation.
+
+### Test Results Summary
+
+| Test | Operation | Result |
+|------|-----------|--------|
+| test_compare_paths.py | Fast vs slow untilize | Both 176 errors |
+| test_row_major.py | ROW_MAJOR tensor | 0 errors (no tilize/untilize) |
+| test_tilize_issue.py | CPU tilize vs device tilize | CPU=0 errors, Device=176 errors |
+| test_untilize_paths.py | to_torch implicit untilize | 0 errors (CPU does untilize) |
+| test_to_layout.py | to_layout workaround | Device=176 errors, Host=0 errors |
+
+### Working Workarounds (CPU-based only)
+
+**Key insight**: `to_torch` on a TILE_LAYOUT tensor does implicit untilize on the CPU, which works correctly!
+
+```python
+# ✅ WORKING: Implicit CPU untilize via to_torch
+result = ttnn.to_torch(tile_tensor)  # 0 errors!
+
+# ✅ WORKING: Move to host, then convert layout
+host_tensor = ttnn.from_device(device_tensor)
+row_major = ttnn.to_layout(host_tensor, ttnn.ROW_MAJOR_LAYOUT)  # 0 errors!
+
+# ✅ WORKING: CPU tilize, then transfer to device
+cpu_tiled = ttnn.from_torch(data, layout=ttnn.TILE_LAYOUT)  # 0 errors!
+device_tensor = ttnn.to_device(cpu_tiled, device)
+
+# ❌ BROKEN: Any device tile operation
+untilized = ttnn.untilize(tensor, use_pack_untilize=False)  # 176 errors
+untilized = ttnn.untilize(tensor)  # 176 errors
+tiled = ttnn.tilize(row_major_tensor)  # 176 errors
+converted = ttnn.to_layout(device_tensor, ttnn.ROW_MAJOR_LAYOUT)  # 176 errors
+```
+
+### Why Slow Path Workaround Appeared to Work (Session 5)
+
+In Session 5, the slow path appeared to work for 8x64 tensors (8 rows). However:
+- 8 rows only uses face pair 0 (rows 0-15)
+- The bug affects face pair 1 at rows 21-31 (y≥5 within face pair)
+- 8-row tensors never reached the corrupted rows
+
+With 32x32 tensors (32 rows), the corruption at rows 21-31 becomes visible.
+
+### Updated Bug Scope
+
+The Blackhole packer/unpacker bug affects:
+- **All tile format conversions on device**
+- **All tensor sizes with >20 rows**
+- **Both fast and slow untilize paths**
+- **Tilize operations (not just untilize)**
+
+### Status: ALL DEVICE TILE OPERATIONS BROKEN - Only CPU-based workarounds work
