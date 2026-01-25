@@ -409,11 +409,21 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
 }
 #endif  // EVERYTHING_FITS_IN_L1
 
-// uses 3 registers starting from dx_register
+// Threshold for switching between mul_tiles and preloading approach
+// mul_tiles works for small Wt but fails for large Wt (repeated CB reads corruption)
+// preloading works for large Wt but fails for small Wt
+constexpr uint32_t WT_THRESHOLD = 16;
+
+// uses 3 registers starting from dx_register (or 4 if use_preloaded_xnorm_sum is true)
 // Computes dx = (1/rstd) * (dy*gamma - (1/N) * sum(dy*gamma) - x_normalized * (1/N) * sum(dy*gamma * x_normalized))
 // result is in dx_register
 // acquire in the inner loop, push after block is processed
-inline void compute_dx(const uint32_t input_tile_idx, const uint32_t dx_register, const uint32_t global_col) {
+template <bool use_preloaded_xnorm_sum>
+inline void compute_dx(
+    const uint32_t input_tile_idx,
+    const uint32_t dx_register,
+    const uint32_t global_col,
+    const uint32_t xnorm_sum_register = 0) {
     const uint32_t temp_register = dx_register + 1U;
 
     // Compute dy * gamma
@@ -431,10 +441,20 @@ inline void compute_dx(const uint32_t input_tile_idx, const uint32_t dx_register
     sub_binary_tile_init();
     sub_binary_tile(dx_register, temp_register, dx_register);
 
-    // Multiply by x_normalized: x_normalized * (1/N) * sum(dy*gamma * x_normalized)
-    reconfig_data_format(cb_x_hat_idx, cb_scaled_dy_gamma_xnorm_sum_idx);
-    mul_tiles_init(cb_x_hat_idx, cb_scaled_dy_gamma_xnorm_sum_idx);
-    mul_tiles(cb_x_hat_idx, cb_scaled_dy_gamma_xnorm_sum_idx, input_tile_idx, 0, temp_register);
+    // Multiply x_hat by xnorm_sum
+    if constexpr (use_preloaded_xnorm_sum) {
+        // Use preloaded xnorm_sum register - avoids repeated CB reads for large Wt
+        reconfig_data_format(cb_x_hat_idx, cb_x_hat_idx);
+        copy_tile_init(cb_x_hat_idx);
+        copy_tile(cb_x_hat_idx, input_tile_idx, temp_register);
+        mul_binary_tile_init();
+        mul_binary_tile(temp_register, xnorm_sum_register, temp_register);
+    } else {
+        // Read directly from CBs - works for small Wt
+        reconfig_data_format(cb_x_hat_idx, cb_scaled_dy_gamma_xnorm_sum_idx);
+        mul_tiles_init(cb_x_hat_idx, cb_scaled_dy_gamma_xnorm_sum_idx);
+        mul_tiles(cb_x_hat_idx, cb_scaled_dy_gamma_xnorm_sum_idx, input_tile_idx, 0, temp_register);
+    }
 
     // Subtract: result - x_normalized * (1/N) * sum(...)
     sub_binary_tile_init();
@@ -454,7 +474,8 @@ inline void compute_dx(const uint32_t input_tile_idx, const uint32_t dx_register
 inline void compute_dgamma_components(
     const uint32_t input_tile_idx, const uint32_t dgamma_register, const uint32_t global_col) {
     // Computes dgamma_components = dy * x_normalized
-    // Load x_normalized
+    // Ensure data format is set for both CBs before mul_tiles
+    reconfig_data_format(cb_dL_out_idx, cb_x_hat_idx);
     mul_tiles_init(cb_dL_out_idx, cb_x_hat_idx);
     mul_tiles(cb_dL_out_idx, cb_x_hat_idx, input_tile_idx, input_tile_idx, dgamma_register);
 }
@@ -464,6 +485,8 @@ inline void compute_dgamma_components(
 // acquire in the inner loop, push after block is processed
 inline void compute_dbeta_components(
     const uint32_t dy_tile_idx, const uint32_t dbeta_register, const uint32_t global_col) {
+    // Ensure data format is set for cb_dL_out_idx before copy_tile_init
+    reconfig_data_format(cb_dL_out_idx, cb_dL_out_idx);
     copy_tile_init(cb_dL_out_idx);
     copy_tile(cb_dL_out_idx, dy_tile_idx, dbeta_register);
 }
@@ -539,14 +562,35 @@ inline void MAIN {
                 uint32_t dx_register;
                 tile_regs_acquire();
 
-                for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
+                // Use different implementations based on Wt:
+                // - For small Wt (< threshold): use mul_tiles (works correctly)
+                // - For large Wt (>= threshold): preload xnorm_sum to avoid repeated CB reads
+                if constexpr (Wt >= WT_THRESHOLD) {
+                    // Pre-load xnorm_sum into a dedicated register ONCE before processing all tiles
+                    const uint32_t xnorm_sum_register = current_block_size + 1;
+                    reconfig_data_format(cb_scaled_dy_gamma_xnorm_sum_idx, cb_scaled_dy_gamma_xnorm_sum_idx);
+                    copy_tile_init(cb_scaled_dy_gamma_xnorm_sum_idx);
+                    copy_tile(cb_scaled_dy_gamma_xnorm_sum_idx, 0, xnorm_sum_register);
+
+                    for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
 #ifdef EVERYTHING_FITS_IN_L1
-                    const uint32_t input_tile_idx = col + block_idx;
+                        const uint32_t input_tile_idx = col + block_idx;
 #else
-                    const uint32_t input_tile_idx = block_idx;
+                        const uint32_t input_tile_idx = block_idx;
 #endif
-                    dx_register = block_idx;
-                    compute_dx(input_tile_idx, dx_register, col + block_idx);
+                        dx_register = block_idx;
+                        compute_dx<true>(input_tile_idx, dx_register, col + block_idx, xnorm_sum_register);
+                    }
+                } else {
+                    for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
+#ifdef EVERYTHING_FITS_IN_L1
+                        const uint32_t input_tile_idx = col + block_idx;
+#else
+                        const uint32_t input_tile_idx = block_idx;
+#endif
+                        dx_register = block_idx;
+                        compute_dx<false>(input_tile_idx, dx_register, col + block_idx);
+                    }
                 }
                 tile_regs_commit();
                 pack_and_push_block(cb_dx_idx, block_size);
