@@ -188,15 +188,34 @@ inline void compute_dbeta_components(...) {
 ### 1. BugRepro_Deterministic_8462Features (max_diff=3.42188)
 
 - **Features**: 8462 (not aligned to 32)
-- **Tiles**: 265 per row
+- **Tiles**: 265 per row (264 full + 1 partial with 14 valid elements)
 - **Masking**: `do_mask_w=true`
-- **Analysis**: This is likely a separate issue related to masking logic, not the repeated CB read bug. The error (3.42) is much smaller than the original bug (1000).
+- **Error Analysis**:
+  - With deterministic inputs (dy=1.0, gamma=1.0, x=0.5), expected dx=0
+  - Actual dx ≈ ±3.42, meaning scaled_sum ≈ 0.99658 instead of 1.0
+  - Sum is missing ~29 elements out of 8462 (~0.34% error)
+  - This is NOT the original bug (which gave error=1000)
+  - Root cause appears to be masking precision issue
 
 ### 2. TightTolerance Tests
 
 - `BugRepro_TightTolerance_8462Features`
 - `BugRepro_TightTolerance_8192Features`
-- **Analysis**: These tests use very tight tolerances (1e-2). The failures may be acceptable numerical precision differences rather than correctness bugs.
+- **Analysis**:
+  - These tests use very tight tolerances (rtol=1e-2, atol=1e-2)
+  - Normal tests use much looser tolerances (rtol=1e-3, atol=0.5)
+  - Failures may be acceptable numerical precision differences
+  - Both dx, dgamma, and dbeta fail with tight tolerance
+
+### Investigation Notes
+
+The `compute_dy_gamma_sum()` function was also fixed to follow the correct accumulation pattern from `compute_dy_gamma_xnorm_sum()`:
+- Added `zero_dst_reg(target_register)` before operations
+- Changed to use target_register pattern for ALL tiles (not just last)
+- Masking applied only to last tile
+- Accumulation happens for all col > 0
+
+This fix follows the working reference implementation exactly but didn't change the test results for the remaining failures, suggesting the masking issue is elsewhere (possibly in mask tile generation or host-side configuration).
 
 ---
 
@@ -261,6 +280,127 @@ The preloading approach was found to cause issues for very small Wt (7 tiles). T
 - **Session 20**: Found tradeoff between `mul_tiles` and preloading approaches
 - **Session 21**: Documented findings, identified root cause
 - **Session 22**: Implemented conditional fix, achieved 9/12 tests passing
+- **Session 23**: Discovered `matmul_tiles` accumulates (DST += result), attempted fixes for small tensors
+- **Session 24**: Found `mm_init` vs `mm_init_short` affects error magnitude (1000 vs 500)
+- **Session 25**: Implemented conditional `mm_init` approach to preserve large tensor fix while attempting small tensor fix
+- **Session 28-29**: Reverted to baseline, established 9 PASS / 10 FAIL as the stable state
+- **Session 30**: Comprehensive fix attempts for the matmul accumulation bug
+
+---
+
+## Session 30 Findings (2026-01-25)
+
+### Key Discoveries
+
+1. **mul_tiles_bcast_rows DOES accumulate** when called repeatedly to the same register, contrary to initial assumptions based on `EltwiseBinaryReuseDestType::NONE`. This is correct behavior - the accumulation is working properly.
+
+2. **The bug is specifically in the matmul step** - after pack_and_push, the destination register still contains the sum value (1.0 for deterministic inputs). When matmul_tiles is called, it accumulates (DST += result) adding the matmul result (1.0) to the stale value (1.0), producing 2.0.
+
+3. **L1 path boundary on Blackhole P150** - Due to larger L1 size on P150, tests with up to ~64 tiles (2048 features) use the L1 path. Previously passing tests (128 tiles, 2048 features) use the L1 path on this hardware.
+
+### Fix Attempts (All Failed)
+
+| Attempt | Description | Result |
+|---------|-------------|--------|
+| zero_dst_reg(0) before matmul | Clear register 0 | No effect, error=1000 |
+| zero_dst_reg(6) + matmul to reg 6 | Use fresh register | No effect, error=1000 |
+| Register 6 without zeroing | Just use fresh register | No effect, error=1000 |
+| mm_init_short instead of mm_init | Different initialization | Made things worse (varying errors 90-752) |
+| Explicit add_binary_tile accumulation | Match compute_dy_gamma_xnorm_sum pattern | Made things MUCH worse (errors 30000-62000) |
+| copy_tile + matmul to fresh register | Break state linkage | Made things worse, broke previously passing tests |
+
+### Analysis
+
+The consistent failure of all fix attempts suggests that:
+1. The matmul accumulation issue is not simply about stale register data
+2. There may be some internal matmul state that carries over between operations
+3. The bug might be hardware-specific to Blackhole or the L1 path configuration
+4. The forward LayerNorm kernel uses the same pattern but works - there may be subtle differences in the overall compute sequence that matter
+
+### Baseline Status
+
+Code reverted to original state. Tests: **9 PASS, 10 FAIL**
+
+Passing tests:
+- MetalLayerNormBw_OneTile
+- MetalLayerNormBw_TwoIncompleteTiles
+- NIGHTLY_MetalLayerNormBw_LargeFeatures_NoL1Fit
+- MetalLayerNormBw_DoesNotFitInL1_WtNotDivisibleBy4
+- MetalLayerNormBw_OneTilePerRow
+- BugRepro_Deterministic_256Tiles
+- BugRepro_Deterministic_128Tiles
+- BugRepro_Deterministic_DifferentValues
+- BugRepro_Deterministic_2048Features
+
+Failing tests (all L1 path with error ≈ 1000):
+- BugRepro_Deterministic_8462Features (error=3.42, masking issue)
+- BugRepro_Deterministic_46Features (error=1000)
+- BugRepro_Deterministic_78Features (error=1000)
+- BugRepro_Deterministic_100Features (error=988)
+- BugRepro_Deterministic_33Features (error=1000)
+- BugRepro_Deterministic_20Features_Aligned (error=992)
+- BugRepro_Deterministic_32Features_NoPadding (error=1000)
+- BugRepro_Deterministic_64Features_NoPadding (error=1000)
+- BugRepro_TightTolerance_8462Features (tight tolerance)
+- BugRepro_TightTolerance_8192Features (tight tolerance)
+
+---
+
+## Ongoing Investigation: Small Tensor Issue (Wt < 16)
+
+### Problem
+
+Small tensors (32 features, Wt < 16) fail with `max_diff = 1000` (error = 2x expected value).
+
+For deterministic test inputs where `mean(dy*gamma)` should equal 1.0:
+- Actual result: 2.0 (error = 1000)
+- With `mm_init_short`: result is 1.5 (error = 500)
+
+### Key Discovery: matmul_tiles ACCUMULATES
+
+From `tt_metal/include/compute_kernel_api/matmul.h:108-109`:
+> "Performs tile-sized matrix multiplication C=A*B between the tiles in two specified input CBs and **accumulates the result to DST (DST += C)**"
+
+This means:
+- `matmul_tiles` does NOT overwrite DST, it ADDS to existing DST value
+- If DST register has leftover data (e.g., 1.0 from sum), matmul adds to it
+- For deterministic input: DST = 1.0 (leftover) + 1.0 (matmul result) = 2.0
+
+### Fix Attempts
+
+| Attempt | Description | Result |
+|---------|-------------|--------|
+| `zero_dst_reg` before matmul | Clear register before accumulation | Still error=1000 |
+| `mm_init_short` instead of `mm_init` | Different matmul initialization | Error reduced to 500 |
+| `mm_init_short` + `zero_dst_reg` | Both together | Still error=500 |
+| Conditional by Wt | mm_init for large, mm_init_short for small | Large PASS, small error=500 |
+
+### Current State
+
+Code is in ORIGINAL state (no fix applied). The problematic pattern is:
+
+```cpp
+// L1 path compute_dy_gamma_sum - BUGGY
+tile_regs_commit();
+pack_and_push(sum_register, cb_scaled_dy_gamma_sum_idx);  // Packs register 0
+
+// Reduce sum across inner dimension and scale by 1/N using matmul
+const uint32_t reduced_sum_register = 0U;
+tile_regs_acquire();  // Register 0 still has leftover sum value!
+cb_wait_front(cb_scaled_dy_gamma_sum_idx, onetile);
+
+reconfig_data_format(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx);
+mm_init(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx, cb_scaled_dy_gamma_sum_idx, 0);
+matmul_tiles(..., reduced_sum_register);  // ACCUMULATES: 1.0 (leftover) + 1.0 (result) = 2.0
+```
+
+### Remaining Questions
+
+1. Why doesn't `zero_dst_reg` clear the stale data before matmul?
+2. Why doesn't using a different register (3, 4, 6) avoid the issue?
+3. Why does the forward kernel with the same pattern work while backward fails?
+4. Is there some L1-path-specific state that affects matmul behavior?
+5. Does this require Blackhole-specific hardware expertise to debug?
 
 ---
 
