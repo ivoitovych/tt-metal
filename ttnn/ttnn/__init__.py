@@ -260,6 +260,7 @@ from ttnn.types import (
 )
 
 from ttnn.device import (
+    Arch,
     Device,
     DispatchCoreType,
     DispatchCoreAxis,
