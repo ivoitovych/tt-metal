@@ -300,6 +300,30 @@ echo "  Python version: ${VENV_PYTHON_VERSION}"
 echo "Installing Python ${VENV_PYTHON_VERSION} via uv..."
 uv python install "${VENV_PYTHON_VERSION}"
 uv venv --link-mode copy --relocatable --managed-python --python "${VENV_PYTHON_VERSION}" "$PYTHON_ENV_DIR"
+
+# Patch the activate script for POSIX sh compatibility.
+# The --relocatable flag generates an activate script that derives VIRTUAL_ENV
+# from $SCRIPT_PATH at runtime, but $SCRIPT_PATH is only set for bash
+# ($BASH_SOURCE), zsh (${(%):-%x}), and ksh (${.sh.file}).
+# POSIX sh (dash, etc.) leaves SCRIPT_PATH empty, causing "realpath ''" errors.
+# This patch adds a fallback to the hardcoded path for shells that cannot
+# determine the script path dynamically. Fish and csh have their own activate
+# files (activate.fish, activate.csh) and are not affected.
+VENV_ABS_PATH=$(cd "$PYTHON_ENV_DIR" && pwd)
+awk -v venv_path="$VENV_ABS_PATH" -v sq="'" '
+/^VIRTUAL_ENV=.*dirname.*SCRIPT_PATH/ {
+    print "if [ -n \"${SCRIPT_PATH:-}\" ]; then"
+    print "    VIRTUAL_ENV=\"$(dirname -- \"$(dirname -- \"$(realpath -- \"$SCRIPT_PATH\")\")\")\""
+    print "else"
+    printf "    VIRTUAL_ENV=%s%s%s\n", sq, venv_path, sq
+    print "fi"
+    next
+}
+{ print }
+' "$PYTHON_ENV_DIR/bin/activate" > "$PYTHON_ENV_DIR/bin/activate.tmp"
+chmod --reference="$PYTHON_ENV_DIR/bin/activate" "$PYTHON_ENV_DIR/bin/activate.tmp"
+mv "$PYTHON_ENV_DIR/bin/activate.tmp" "$PYTHON_ENV_DIR/bin/activate"
+
 source "$PYTHON_ENV_DIR/bin/activate"
 
 # Install uv into the venv at the same version as the invoking uv
