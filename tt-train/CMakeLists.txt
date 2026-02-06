@@ -1,15 +1,10 @@
 cmake_minimum_required(VERSION 3.18...4.2)
 include(cmake/compilers.cmake)
 
-# Allow CI/user override via CC/CXX environment variables.
-# Otherwise default to clang-20 (required for ABI compatibility with tt-metal).
-if(DEFINED ENV{CMAKE_C_COMPILER} AND DEFINED ENV{CMAKE_CXX_COMPILER})
-    message(STATUS "Setting C and C++ compiler from environment variables")
-    set(CMAKE_C_COMPILER $ENV{CMAKE_C_COMPILER})
-    set(CMAKE_CXX_COMPILER $ENV{CMAKE_CXX_COMPILER})
-elseif(NOT CMAKE_CXX_COMPILER)
-    message(STATUS "No compiler specified, defaulting to clang-20")
-    find_and_set_clang20()
+# If no compiler is specified via command line, toolchain file, or CC/CXX
+# environment variables, try to inherit from tt-metal's build for ABI compat.
+if(NOT CMAKE_C_COMPILER AND NOT CMAKE_CXX_COMPILER AND NOT DEFINED ENV{CC} AND NOT DEFINED ENV{CXX})
+    inherit_compiler_from_tt_metal()
 endif()
 
 project(
