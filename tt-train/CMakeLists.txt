@@ -1,9 +1,15 @@
 cmake_minimum_required(VERSION 3.18...4.2)
 include(cmake/compilers.cmake)
 
-# If no compiler is specified via command line, toolchain file, or CC/CXX
-# environment variables, try to inherit from tt-metal's build for ABI compat.
-if(NOT CMAKE_C_COMPILER AND NOT CMAKE_CXX_COMPILER AND NOT DEFINED ENV{CC} AND NOT DEFINED ENV{CXX})
+# When building standalone (not as a tt-metal subproject) and no compiler is
+# explicitly requested via CC/CXX env vars, inherit the compiler from
+# tt-metal's CMakeCache.txt for ABI compatibility.
+#
+# Note: We cannot check CMAKE_C_COMPILER here because build systems like
+# scikit-build-core pre-set it via an initial cache file (-C CMakeInit.txt)
+# before CMakeLists.txt runs. The top-level check is sufficient: when tt-train
+# is added as a subproject, project() has already locked in the compiler.
+if(NOT DEFINED ENV{CC} AND NOT DEFINED ENV{CXX} AND CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     inherit_compiler_from_tt_metal()
 endif()
 
