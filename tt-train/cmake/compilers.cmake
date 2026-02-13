@@ -84,36 +84,5 @@ function(CHECK_COMPILERS)
     endif()
 endfunction()
 
-function(ADJUST_COMPILER_WARNINGS)
-    if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-        target_compile_options(
-            compiler_warnings
-            INTERFACE
-                -Wsometimes-uninitialized
-                -Wno-c++11-narrowing
-                -Wno-error=local-type-template-args
-                -Wno-delete-non-abstract-non-virtual-dtor
-                -Wno-c99-designator
-                -Wno-shift-op-parentheses
-                -Wno-non-c-typedef-for-linkage
-                -Wno-deprecated-this-capture
-                -Wno-deprecated-volatile
-                -Wno-deprecated-builtins
-                -Wno-deprecated-declarations
-        )
-    else() # GCC-12 or higher
-        target_compile_options(
-            compiler_warnings
-            INTERFACE
-                -Wno-deprecated
-                -Wno-attributes
-                -Wno-stringop-overread
-                -Wno-stringop-overflow
-                -Wno-maybe-uninitialized
-                -Wno-missing-requires
-                -Wno-narrowing
-                -Wno-non-template-friend
-                -Wno-error=non-template-friend
-        )
-    endif()
-endfunction()
+# ADJUST_COMPILER_WARNINGS() removed to verify it is dead code.
+# The function was never called and the compiler_warnings target does not exist.
