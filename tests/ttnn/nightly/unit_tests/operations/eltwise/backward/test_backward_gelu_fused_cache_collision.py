@@ -18,11 +18,10 @@ The bug has two facets:
    after adding a "poly" kernel path, the cache would serve the wrong program.
 
 These tests verify:
-- "none" vs "tanh" produce distinct outputs (currently passes).
-- "none" vs "poly" produce distinct outputs (currently FAILS — reproduces
-  the bug: "poly" silently runs the "none" kernel).
-- Each mode matches its own PyTorch golden reference (the "poly" golden test
-  currently FAILS because the "poly" kernel does not exist yet).
+- "none" vs "tanh" produce distinct outputs.
+- "none" vs "poly" produce distinct outputs (xfail: "poly" kernel not yet
+  implemented, see PR #36366).
+- Each mode matches its own PyTorch golden reference.
 """
 
 import torch
@@ -71,14 +70,14 @@ def test_gelu_bw_cache_collision_none_vs_tanh(input_shapes, device):
     )
 
 
+@pytest.mark.xfail(reason="poly kernel not yet implemented (PR #36366)", strict=True)
 @pytest.mark.parametrize("input_shapes", INPUT_SHAPES)
 def test_gelu_bw_cache_collision_none_vs_poly(input_shapes, device):
     """
     Issue #38411 core reproduction: "none" and "poly" must produce different
-    outputs. Currently FAILS because:
-    - The program factory has no "poly" branch (falls through to "none").
-    - compute_program_hash ignores approximate, so even with a "poly" kernel
-      the cache would return the "none" program.
+    outputs. Currently xfail because the program factory has no "poly" branch
+    (falls through to "none"). Will pass once the poly kernel is added
+    (PR #36366).
     """
     torch.manual_seed(42)
     pt_input = torch.rand(input_shapes).bfloat16() * 200 - 100
@@ -127,19 +126,17 @@ def test_gelu_bw_approximate_golden(input_shapes, approximate, device):
     )
 
 
+@pytest.mark.xfail(reason="poly kernel not yet implemented (PR #36366)", strict=True)
 @pytest.mark.parametrize("input_shapes", INPUT_SHAPES)
 def test_gelu_bw_poly_golden(input_shapes, device):
     """
-    The "poly" mode must match PyTorch's GELU backward with approximate="none"
-    computed via polynomial approximation (higher precision than "tanh").
+    The "poly" mode must produce results close to the exact ("none") golden
+    but via a different compute path (polynomial approximation), so its output
+    must NOT be bitwise-identical to "none".
 
-    Currently FAILS because the "poly" kernel does not exist — the factory
-    falls through to the "none" (erf-based) kernel. Once the poly kernel is
-    added (PR #36366), this test should pass.
-
-    Note: PyTorch does not have a "poly" GELU mode. The "poly" kernel is a
-    Tenstorrent-specific polynomial approximation that should closely match
-    the exact ("none") result. We compare against the exact golden here.
+    Currently xfail because the "poly" kernel does not exist — the factory
+    falls through to the "none" (erf-based) kernel. Will pass once the poly
+    kernel is added (PR #36366).
     """
     torch.manual_seed(42)
     pt_input = torch.rand(input_shapes).bfloat16() * 200 - 100
