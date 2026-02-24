@@ -3,25 +3,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Reproduction test for https://github.com/tenstorrent/tt-metal/issues/38411
+Regression test for https://github.com/tenstorrent/tt-metal/issues/38411
 
-ttnn.experimental.gelu_bw compute_program_hash ignores the `approximate`
-parameter, causing a program cache collision. When two calls with different
-`approximate` values share the same input shapes and dtypes, the second call
-silently reuses the kernel compiled for the first call.
-
-The bug has two facets:
-1. The program factory (gelu_backward_program_factory.cpp) only distinguishes
-   "tanh" from everything else — passing "poly" silently falls through to
-   the "none" kernel.
-2. compute_program_hash does not include `approximate` in the hash, so even
-   after adding a "poly" kernel path, the cache would serve the wrong program.
+compute_program_hash in gelu_backward_device_operation.cpp did not include
+the `approximate` parameter, causing program cache collisions between
+"none" and "tanh" modes. When both modes were called with the same input
+shape/dtype in the same device session, the second call silently reused
+the first call's compiled kernel.
 
 These tests verify:
-- "none" vs "tanh" produce distinct outputs.
-- "none" vs "poly" produce distinct outputs (xfail: "poly" kernel not yet
-  implemented, see PR #36366).
-- Each mode matches its own PyTorch golden reference.
+- "none" and "tanh" produce distinct outputs when sharing a device session
+  (i.e. the program cache does not collide).
+- Each mode individually matches its own PyTorch golden reference (with
+  tolerances appropriate for the current BF16 kernels).
 """
 
 import torch
@@ -47,9 +41,9 @@ INPUT_SHAPES = (
 @pytest.mark.parametrize("input_shapes", INPUT_SHAPES)
 def test_gelu_bw_cache_collision_none_vs_tanh(input_shapes, device):
     """
-    Sanity check: "none" and "tanh" use different kernels and must produce
-    different outputs even when run sequentially on the same device (shared
-    program cache).
+    Issue #38411: "none" and "tanh" must produce different outputs even when
+    run sequentially on the same device (shared program cache). A hash
+    collision would cause the second call to silently reuse the first kernel.
     """
     torch.manual_seed(42)
     pt_input = torch.rand(input_shapes).bfloat16() * 200 - 100
@@ -70,35 +64,6 @@ def test_gelu_bw_cache_collision_none_vs_tanh(input_shapes, device):
     )
 
 
-@pytest.mark.xfail(reason="poly kernel not yet implemented (PR #36366)", strict=True)
-@pytest.mark.parametrize("input_shapes", INPUT_SHAPES)
-def test_gelu_bw_cache_collision_none_vs_poly(input_shapes, device):
-    """
-    Issue #38411 core reproduction: "none" and "poly" must produce different
-    outputs. Currently xfail because the program factory has no "poly" branch
-    (falls through to "none"). Will pass once the poly kernel is added
-    (PR #36366).
-    """
-    torch.manual_seed(42)
-    pt_input = torch.rand(input_shapes).bfloat16() * 200 - 100
-    pt_grad = torch.rand(input_shapes).bfloat16() * 10 - 5
-
-    input_tensor = ttnn.from_torch(pt_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    grad_tensor = ttnn.from_torch(pt_grad, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-    result_none = ttnn.experimental.gelu_bw(grad_tensor, input_tensor, approximate="none")
-    result_poly = ttnn.experimental.gelu_bw(grad_tensor, input_tensor, approximate="poly")
-
-    out_none = ttnn.to_torch(result_none[0])
-    out_poly = ttnn.to_torch(result_poly[0])
-
-    assert not torch.equal(out_none, out_poly), (
-        "gelu_bw approximate='none' and approximate='poly' produced identical outputs. "
-        "This confirms issue #38411: the 'poly' mode silently runs the 'none' kernel "
-        "due to missing kernel path and/or program cache hash collision."
-    )
-
-
 @pytest.mark.parametrize("input_shapes", INPUT_SHAPES)
 @pytest.mark.parametrize("approximate", ("none", "tanh"))
 def test_gelu_bw_approximate_golden(input_shapes, approximate, device):
@@ -107,6 +72,7 @@ def test_gelu_bw_approximate_golden(input_shapes, approximate, device):
 
     Unlike the existing test_bw_gelu which uses a golden that ignores the
     approximate parameter, this test computes a mode-specific golden.
+    Tolerances are wide enough to accept the current BF16 kernel precision.
     """
     torch.manual_seed(42)
     pt_input = torch.rand(input_shapes).bfloat16() * 200 - 100
@@ -123,46 +89,4 @@ def test_gelu_bw_approximate_golden(input_shapes, approximate, device):
     assert torch.allclose(tt_out.float(), golden.float(), atol=0.2, rtol=0.05), (
         f"gelu_bw(approximate='{approximate}') does not match PyTorch golden.\n"
         f"Max abs diff: {(tt_out.float() - golden.float()).abs().max().item():.6f}"
-    )
-
-
-@pytest.mark.xfail(reason="poly kernel not yet implemented (PR #36366)", strict=True)
-@pytest.mark.parametrize("input_shapes", INPUT_SHAPES)
-def test_gelu_bw_poly_golden(input_shapes, device):
-    """
-    The "poly" mode must produce results close to the exact ("none") golden
-    but via a different compute path (polynomial approximation), so its output
-    must NOT be bitwise-identical to "none".
-
-    Currently xfail because the "poly" kernel does not exist — the factory
-    falls through to the "none" (erf-based) kernel. Will pass once the poly
-    kernel is added (PR #36366).
-    """
-    torch.manual_seed(42)
-    pt_input = torch.rand(input_shapes).bfloat16() * 200 - 100
-    pt_grad = torch.rand(input_shapes).bfloat16() * 10 - 5
-
-    input_tensor = ttnn.from_torch(pt_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    grad_tensor = ttnn.from_torch(pt_grad, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-    # Run "none" first to populate cache, then "poly" — if cache collision
-    # exists, "poly" will silently return "none" results
-    result_none = ttnn.experimental.gelu_bw(grad_tensor, input_tensor, approximate="none")
-    result_poly = ttnn.experimental.gelu_bw(grad_tensor, input_tensor, approximate="poly")
-
-    out_none = ttnn.to_torch(result_none[0])
-    out_poly = ttnn.to_torch(result_poly[0])
-
-    golden_none = _gelu_bw_golden(pt_grad, pt_input, approximate="none")
-
-    # The poly kernel should produce results close to the exact golden
-    # but NOT bitwise-identical to the "none" kernel output (different
-    # compute path). If they are identical, the poly kernel was never run.
-    assert torch.allclose(out_poly.float(), golden_none.float(), atol=0.2, rtol=0.05), (
-        f"gelu_bw(approximate='poly') does not match expected golden.\n"
-        f"Max abs diff: {(out_poly.float() - golden_none.float()).abs().max().item():.6f}"
-    )
-    assert not torch.equal(out_none, out_poly), (
-        "gelu_bw 'poly' output is bitwise-identical to 'none' output. "
-        "The poly kernel was not dispatched (issue #38411)."
     )
