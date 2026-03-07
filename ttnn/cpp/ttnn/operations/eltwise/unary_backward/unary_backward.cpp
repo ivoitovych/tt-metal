@@ -20,6 +20,7 @@
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
+#include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
@@ -1609,23 +1610,12 @@ std::vector<std::optional<ttnn::Tensor>> gelu_bw(
             grad, (ttnn::add(left_derivative, right_derivative)), std::nullopt, output_memory_config, input_grad);
         result.push_back(input_grad);
     } else {
-        float kAlpha = M_SQRT1_2;
-        float kBeta = M_2_SQRTPI * M_SQRT1_2 * 0.5;
-        Tensor cdf = ttnn::multiply(
-            (ttnn::add(
-                ttnn::erf(ttnn::multiply(input, kAlpha, std::nullopt, output_memory_config)),
-                1,
-                std::nullopt,
-                output_memory_config)),
-            0.5);
-        Tensor pdf = ttnn::multiply(
-            ttnn::exp(ttnn::multiply(ttnn::multiply(input, input), -0.5), false, output_memory_config),
-            kBeta,
-            std::nullopt,
-            output_memory_config);
-        ttnn::multiply(
-            grad, ttnn::add(cdf, ttnn::multiply(input, pdf)), std::nullopt, output_memory_config, input_grad);
-        result.push_back(input_grad);
+        // Delegate to the fused polynomial kernel (merged via PR #36366).
+        // This replaces the composite erf+exp decomposition which had
+        // catastrophic cancellation (Max ULP = 32,460).
+        auto result_tensor = ttnn::experimental::gelu_bw(
+            grad, input, approximate, output_memory_config, input_grad);
+        result.push_back(result_tensor);
     }
 
     return result;
