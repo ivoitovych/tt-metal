@@ -53,6 +53,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
+#include <sstream>
+#include <tt-logger/tt-logger.hpp>
 
 namespace ttnn::test {
 
@@ -264,7 +266,11 @@ TEST_F(GeluBwMainUlpTest, DerivativeAtZero) {
 
     int32_t ulp = bf16_ulp_bw_main::ulp_distance_bf16_daz(actual, expected);
 
-    std::cout << "x=0: expected=" << expected << ", actual=" << actual << ", ULP=" << ulp << std::endl;
+    {
+        std::ostringstream oss_;
+        oss_ << "x=0: expected=" << expected << ", actual=" << actual << ", ULP=" << ulp;
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
     EXPECT_LE(ulp, 2) << "GELU'(0) should be ~0.5 with low ULP error";
 }
@@ -286,8 +292,11 @@ TEST_F(GeluBwMainUlpTest, DerivativeAtPositiveValues) {
         float expected = bf16_ulp_bw_main::gelu_derivative_expected_bf16_daz(input_val);
         int32_t ulp = bf16_ulp_bw_main::ulp_distance_bf16_daz(actual, expected);
 
-        std::cout << "x=" << input_val << ": expected=" << expected << ", actual=" << actual << ", ULP=" << ulp
-                  << std::endl;
+        {
+            std::ostringstream oss_;
+            oss_ << "x=" << input_val << ": expected=" << expected << ", actual=" << actual << ", ULP=" << ulp;
+            log_debug(tt::LogTest, "{}", oss_.str());
+        }
 
         EXPECT_LE(ulp, max_expected_ulp) << "GELU'(" << input_val << ") ULP too high";
     }
@@ -312,8 +321,11 @@ TEST_F(GeluBwMainUlpTest, DerivativeAtNegativeValues) {
         float expected = bf16_ulp_bw_main::gelu_derivative_expected_bf16_daz(input_val);
         int32_t ulp = bf16_ulp_bw_main::ulp_distance_bf16_daz(actual, expected);
 
-        std::cout << "x=" << input_val << ": expected=" << expected << ", actual=" << actual << ", ULP=" << ulp
-                  << std::endl;
+        {
+            std::ostringstream oss_;
+            oss_ << "x=" << input_val << ": expected=" << expected << ", actual=" << actual << ", ULP=" << ulp;
+            log_debug(tt::LogTest, "{}", oss_.str());
+        }
 
         EXPECT_LE(ulp, max_expected_ulp) << "GELU'(" << input_val << ") ULP too high";
     }
@@ -329,8 +341,11 @@ TEST_F(GeluBwMainUlpTest, DerivativeNearZero) {
         float expected = bf16_ulp_bw_main::gelu_derivative_expected_bf16_daz(input_val);
         int32_t ulp = bf16_ulp_bw_main::ulp_distance_bf16_daz(actual, expected);
 
-        std::cout << "x=" << input_val << ": expected=" << expected << ", actual=" << actual << ", ULP=" << ulp
-                  << std::endl;
+        {
+            std::ostringstream oss_;
+            oss_ << "x=" << input_val << ": expected=" << expected << ", actual=" << actual << ", ULP=" << ulp;
+            log_debug(tt::LogTest, "{}", oss_.str());
+        }
 
         EXPECT_LE(ulp, 2) << "GELU'(" << input_val << ") near-zero ULP too high";
     }
@@ -352,8 +367,12 @@ TEST_F(GeluBwMainUlpTest, WithGradientScaling) {
         float expected = bf16_ulp_bw_main::gelu_bw_expected_bf16_daz(grad_val, input_val);
         int32_t ulp = bf16_ulp_bw_main::ulp_distance_bf16_daz(actual, expected);
 
-        std::cout << "x=" << input_val << ", grad=" << grad_val << ": expected=" << expected << ", actual=" << actual
-                  << ", ULP=" << ulp << std::endl;
+        {
+            std::ostringstream oss_;
+            oss_ << "x=" << input_val << ", grad=" << grad_val << ": expected=" << expected << ", actual=" << actual
+                 << ", ULP=" << ulp;
+            log_debug(tt::LogTest, "{}", oss_.str());
+        }
 
         EXPECT_LE(ulp, max_expected_ulp) << "GELU backward with grad ULP too high";
     }
@@ -389,7 +408,11 @@ TEST_F(GeluBwMainUlpTest, ComprehensiveULPByRegion) {
     }
 
     const size_t valid_count = input_values.size();
-    std::cout << "\nCollected " << valid_count << " valid BF16 values\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "\nCollected " << valid_count << " valid BF16 values";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
     // Pad to tile boundary (multiple of 32*32 = 1024)
     const size_t tile_size = tt::constants::TILE_HW;
@@ -492,26 +515,62 @@ TEST_F(GeluBwMainUlpTest, ComprehensiveULPByRegion) {
     }
 
     // Print results
-    std::cout << "\n============================================================\n";
-    std::cout << "GELU BACKWARD ULP ANALYSIS BY REGION (DAZ+FTZ MODEL)\n";
-    std::cout << "============================================================\n";
-    std::cout << std::setw(30) << "Region" << std::setw(10) << "Count" << std::setw(12) << "Mean ULP" << std::setw(12)
-              << "Max ULP" << std::setw(15) << "Worst x\n";
-    std::cout << std::string(79, '-') << "\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "\n============================================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "GELU BACKWARD ULP ANALYSIS BY REGION (DAZ+FTZ MODEL)\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "============================================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << std::setw(30) << "Region" << std::setw(10) << "Count" << std::setw(12) << "Mean ULP" << std::setw(12)
+             << "Max ULP" << std::setw(15) << "Worst x";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << std::string(79, '-');
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
     for (const auto& r : regions) {
         if (r.count > 0) {
-            std::cout << std::setw(30) << r.name << std::setw(10) << r.count << std::setw(12) << std::fixed
-                      << std::setprecision(2) << (r.ulp_sum / r.count) << std::setw(12) << r.max_ulp << std::setw(15)
-                      << std::scientific << std::setprecision(3) << r.worst_x << "\n";
+            {
+                std::ostringstream oss_;
+                oss_ << std::setw(30) << r.name << std::setw(10) << r.count << std::setw(12) << std::fixed
+                     << std::setprecision(2) << (r.ulp_sum / r.count) << std::setw(12) << r.max_ulp << std::setw(15)
+                     << std::scientific << std::setprecision(3) << r.worst_x;
+                log_debug(tt::LogTest, "{}", oss_.str());
+            }
         }
     }
 
-    std::cout << std::string(79, '-') << "\n";
-    std::cout << std::setw(30) << "OVERALL" << std::setw(10) << valid_count << std::setw(12) << std::fixed
-              << std::setprecision(2) << (overall_ulp_sum / valid_count) << std::setw(12) << overall_max_ulp
-              << std::setw(15) << std::scientific << std::setprecision(3) << overall_worst_x << "\n";
-    std::cout << "============================================================\n";
+    {
+        std::ostringstream oss_;
+        oss_ << std::string(79, '-');
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << std::setw(30) << "OVERALL" << std::setw(10) << valid_count << std::setw(12) << std::fixed
+             << std::setprecision(2) << (overall_ulp_sum / valid_count) << std::setw(12) << overall_max_ulp
+             << std::setw(15) << std::scientific << std::setprecision(3) << overall_worst_x;
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "============================================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
     // Per-region regression guards
     // Thresholds based on the polynomial+exp implementation (overall max ULP = 5)
@@ -606,15 +665,35 @@ TEST_F(GeluBwMainUlpTest, CumulativeULPDistribution) {
     }
 
     // Print cumulative distribution
-    std::cout << "\n============================================================\n";
-    std::cout << "GELU BACKWARD CUMULATIVE ULP DISTRIBUTION (DAZ+FTZ MODEL)\n";
-    std::cout << "============================================================\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "\n============================================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "GELU BACKWARD CUMULATIVE ULP DISTRIBUTION (DAZ+FTZ MODEL)\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "============================================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
     std::vector<int> thresholds = {0, 1, 2, 3, 5, 10, 20, 50, 100, 500, 1000};
 
-    std::cout << std::setw(10) << "ULP <=" << std::setw(12) << "Count" << std::setw(12) << "Percent" << std::setw(12)
-              << "Cumul %\n";
-    std::cout << std::string(46, '-') << "\n";
+    {
+        std::ostringstream oss_;
+        oss_ << std::setw(10) << "ULP <=" << std::setw(12) << "Count" << std::setw(12) << "Percent" << std::setw(12)
+             << "Cumul %";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << std::string(46, '-');
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
     for (int threshold : thresholds) {
         int total_le_threshold = 0;
@@ -624,13 +703,29 @@ TEST_F(GeluBwMainUlpTest, CumulativeULPDistribution) {
             }
         }
         double percent = 100.0 * total_le_threshold / valid_count;
-        std::cout << std::setw(10) << threshold << std::setw(12) << total_le_threshold << std::setw(11) << std::fixed
-                  << std::setprecision(2) << percent << "%" << std::setw(11) << percent << "%\n";
+        {
+            std::ostringstream oss_;
+            oss_ << std::setw(10) << threshold << std::setw(12) << total_le_threshold << std::setw(11) << std::fixed
+                 << std::setprecision(2) << percent << "%" << std::setw(11) << percent << "%";
+            log_debug(tt::LogTest, "{}", oss_.str());
+        }
     }
 
-    std::cout << std::string(46, '-') << "\n";
-    std::cout << "\nMax ULP: " << max_ulp << " at x = " << worst_x << "\n";
-    std::cout << "============================================================\n";
+    {
+        std::ostringstream oss_;
+        oss_ << std::string(46, '-');
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "\nMax ULP: " << max_ulp << " at x = " << worst_x;
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "============================================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
     // Regression guards
     EXPECT_LE(max_ulp, 2) << "Max ULP " << max_ulp << " at x=" << worst_x << " exceeds threshold 2";
@@ -666,11 +761,31 @@ TEST_F(GeluBwMainUlpTest, ReferenceImplementationVerification) {
     double deriv_min = bf16_ulp_bw_main::gelu_derivative_exact(-0.751);
     EXPECT_LT(std::abs(deriv_min), 0.1) << "GELU'(-0.751) should be near 0 (local minimum)";
 
-    std::cout << "\nReference implementation verification:\n";
-    std::cout << "GELU'(0) = " << deriv_0 << " (expected: 0.5)\n";
-    std::cout << "GELU'(100) = " << deriv_large << " (expected: ~1.0)\n";
-    std::cout << "GELU'(-100) = " << deriv_neg_large << " (expected: ~0.0)\n";
-    std::cout << "GELU'(-0.751) = " << deriv_min << " (expected: ~0.0 at local min)\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "\nReference implementation verification:\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "GELU'(0) = " << deriv_0 << " (expected: 0.5)";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "GELU'(100) = " << deriv_large << " (expected: ~1.0)";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "GELU'(-100) = " << deriv_neg_large << " (expected: ~0.0)";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "GELU'(-0.751) = " << deriv_min << " (expected: ~0.0 at local min)";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 }
 
 // Precision guard: the [-5, -2] region where the original erfc bug had max ULP = 29,756.
@@ -682,13 +797,37 @@ TEST_F(GeluBwMainUlpTest, ModerateNegativeRegionBugAnalysis) {
     std::vector<float> moderate_negative_values = {
         -2.0f, -2.5f, -3.0f, -3.5f, -3.7f, -3.719f, -3.75f, -3.8f, -4.0f, -4.5f, -5.0f};
 
-    std::cout << "\n========================================\n";
-    std::cout << "MODERATE NEGATIVE REGION BUG ANALYSIS\n";
-    std::cout << "(Critical region for training: [-5, -2])\n";
-    std::cout << "========================================\n";
-    std::cout << std::setw(10) << "x" << std::setw(15) << "Expected" << std::setw(15) << "Actual" << std::setw(10)
-              << "ULP" << std::setw(15) << "Abs Error\n";
-    std::cout << std::string(65, '-') << "\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "\n========================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "MODERATE NEGATIVE REGION BUG ANALYSIS\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "(Critical region for training: [-5, -2])\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "========================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << std::setw(10) << "x" << std::setw(15) << "Expected" << std::setw(15) << "Actual" << std::setw(10)
+             << "ULP" << std::setw(15) << "Abs Error";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << std::string(65, '-');
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
     int max_ulp_found = 0;
     float worst_x = 0;
@@ -699,9 +838,13 @@ TEST_F(GeluBwMainUlpTest, ModerateNegativeRegionBugAnalysis) {
         int32_t ulp = bf16_ulp_bw_main::ulp_distance_bf16_daz(actual, expected);
         float abs_error = std::abs(actual - expected);
 
-        std::cout << std::setw(10) << std::fixed << std::setprecision(3) << x << std::setw(15) << std::scientific
-                  << std::setprecision(3) << expected << std::setw(15) << actual << std::setw(10) << ulp
-                  << std::setw(15) << abs_error << "\n";
+        {
+            std::ostringstream oss_;
+            oss_ << std::setw(10) << std::fixed << std::setprecision(3) << x << std::setw(15) << std::scientific
+                 << std::setprecision(3) << expected << std::setw(15) << actual << std::setw(10) << ulp << std::setw(15)
+                 << abs_error;
+            log_debug(tt::LogTest, "{}", oss_.str());
+        }
 
         if (ulp > max_ulp_found) {
             max_ulp_found = ulp;
@@ -709,9 +852,21 @@ TEST_F(GeluBwMainUlpTest, ModerateNegativeRegionBugAnalysis) {
         }
     }
 
-    std::cout << std::string(65, '-') << "\n";
-    std::cout << "Worst ULP: " << max_ulp_found << " at x = " << worst_x << "\n";
-    std::cout << "========================================\n";
+    {
+        std::ostringstream oss_;
+        oss_ << std::string(65, '-');
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "Worst ULP: " << max_ulp_found << " at x = " << worst_x;
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "========================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
     // Regression guard: moderate negative region must stay within 10 ULP
     // Original bug had max ULP = 29,756 here
@@ -724,12 +879,32 @@ TEST_F(GeluBwMainUlpTest, ModerateNegativeRegionBugAnalysis) {
 TEST_F(GeluBwMainUlpTest, DeepNegativeRegionStability) {
     std::vector<float> deep_negative_values = {-6.0f, -7.0f, -8.0f, -9.0f, -10.0f, -12.0f, -13.0f};
 
-    std::cout << "\n========================================\n";
-    std::cout << "DEEP NEGATIVE REGION ANALYSIS\n";
-    std::cout << "========================================\n";
-    std::cout << std::setw(10) << "x" << std::setw(15) << "Expected" << std::setw(15) << "Actual" << std::setw(10)
-              << "ULP\n";
-    std::cout << std::string(50, '-') << "\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "\n========================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "DEEP NEGATIVE REGION ANALYSIS\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "========================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << std::setw(10) << "x" << std::setw(15) << "Expected" << std::setw(15) << "Actual" << std::setw(10)
+             << "ULP";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << std::string(50, '-');
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
     int max_ulp = 0;
     float worst_x = 0;
@@ -739,15 +914,23 @@ TEST_F(GeluBwMainUlpTest, DeepNegativeRegionStability) {
         float expected = bf16_ulp_bw_main::gelu_derivative_expected_bf16_daz(x);
         int32_t ulp = bf16_ulp_bw_main::ulp_distance_bf16_daz(actual, expected);
 
-        std::cout << std::setw(10) << x << std::setw(15) << std::scientific << std::setprecision(3) << expected
-                  << std::setw(15) << actual << std::setw(10) << ulp << "\n";
+        {
+            std::ostringstream oss_;
+            oss_ << std::setw(10) << x << std::setw(15) << std::scientific << std::setprecision(3) << expected
+                 << std::setw(15) << actual << std::setw(10) << ulp;
+            log_debug(tt::LogTest, "{}", oss_.str());
+        }
 
         if (ulp > max_ulp) {
             max_ulp = ulp;
             worst_x = x;
         }
     }
-    std::cout << "========================================\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "========================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
     // Regression guard: deep negative values should saturate cleanly
     EXPECT_LE(max_ulp, 2) << "Deep negative region max ULP " << max_ulp << " at x=" << worst_x
@@ -757,9 +940,21 @@ TEST_F(GeluBwMainUlpTest, DeepNegativeRegionStability) {
 // Correctness guard: 6 key points spanning all kernel code paths.
 // Per-point ULP thresholds (2-5). Catches any single broken code path quickly.
 TEST_F(GeluBwMainUlpTest, SummaryStatistics) {
-    std::cout << "\n========================================\n";
-    std::cout << "GELU BACKWARD ULP SUMMARY (DAZ+FTZ MODEL)\n";
-    std::cout << "========================================\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "\n========================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "GELU BACKWARD ULP SUMMARY (DAZ+FTZ MODEL)\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "========================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
     // Test key regions with per-point ULP thresholds
     // Each point tests a different kernel code path
@@ -783,19 +978,51 @@ TEST_F(GeluBwMainUlpTest, SummaryStatistics) {
         float expected = bf16_ulp_bw_main::gelu_derivative_expected_bf16_daz(kp.x);
         int32_t ulp = bf16_ulp_bw_main::ulp_distance_bf16_daz(actual, expected);
 
-        std::cout << kp.name << " (x=" << kp.x << "): ";
-        std::cout << "expected=" << expected << ", actual=" << actual << ", ULP=" << ulp << "\n";
+        {
+            std::ostringstream oss_;
+            oss_ << kp.name << " (x=" << kp.x << "): ";
+            log_debug(tt::LogTest, "{}", oss_.str());
+        }
+        {
+            std::ostringstream oss_;
+            oss_ << "expected=" << expected << ", actual=" << actual << ", ULP=" << ulp;
+            log_debug(tt::LogTest, "{}", oss_.str());
+        }
 
         EXPECT_LE(ulp, kp.max_ulp_threshold)
             << kp.name << " (x=" << kp.x << "): ULP " << ulp << " exceeds threshold " << kp.max_ulp_threshold;
     }
 
-    std::cout << "\nExpected behavior:\n";
-    std::cout << "- GELU'(0) ≈ 0.5\n";
-    std::cout << "- GELU'(x) → 1 as x → +∞\n";
-    std::cout << "- GELU'(x) → 0 as x → -∞\n";
-    std::cout << "- Local minimum near x ≈ -0.751 where GELU'(x) ≈ 0\n";
-    std::cout << "========================================\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "\nExpected behavior:\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "- GELU'(0) ≈ 0.5\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "- GELU'(x) → 1 as x → +∞\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "- GELU'(x) → 0 as x → -∞\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "- Local minimum near x ≈ -0.751 where GELU'(x) ≈ 0\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "========================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 }
 
 // =============================================================================
@@ -813,7 +1040,11 @@ TEST_F(GeluBwMainPolyTest, DerivativeAtZero) {
 
     int32_t ulp = bf16_ulp_bw_main::ulp_distance_bf16_daz(actual, expected);
 
-    std::cout << "[POLY] x=0: expected=" << expected << ", actual=" << actual << ", ULP=" << ulp << std::endl;
+    {
+        std::ostringstream oss_;
+        oss_ << "[POLY] x=0: expected=" << expected << ", actual=" << actual << ", ULP=" << ulp;
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
     EXPECT_LE(ulp, 2) << "POLY GELU'(0) should be ~0.5 with low ULP error";
 }
@@ -838,14 +1069,21 @@ TEST_F(GeluBwMainPolyTest, DerivativeAtNegativeValues) {
         {-5.0f, 2},  // Edge of left polynomial / start of exp-based
     };
 
-    std::cout << "\n[POLY] Polynomial region tests (should have low ULP):\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "\n[POLY] Polynomial region tests (should have low ULP):\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
     for (const auto& [input_val, max_expected_ulp] : poly_tests) {
         float actual = run_gelu_bw_main_single(*device_, input_val);
         float expected = bf16_ulp_bw_main::gelu_derivative_expected_bf16_daz(input_val);
         int32_t ulp = bf16_ulp_bw_main::ulp_distance_bf16_daz(actual, expected);
 
-        std::cout << "[POLY] x=" << input_val << ": expected=" << expected << ", actual=" << actual << ", ULP=" << ulp
-                  << std::endl;
+        {
+            std::ostringstream oss_;
+            oss_ << "[POLY] x=" << input_val << ": expected=" << expected << ", actual=" << actual << ", ULP=" << ulp;
+            log_debug(tt::LogTest, "{}", oss_.str());
+        }
 
         EXPECT_LE(ulp, max_expected_ulp) << "POLY GELU'(" << input_val << ") polynomial region ULP too high";
     }
@@ -862,14 +1100,21 @@ TEST_F(GeluBwMainPolyTest, DerivativeAtNegativeValues) {
         {-13.0f, 2},  // Near saturation boundary
     };
 
-    std::cout << "\n[EXP] Exp-based region tests (x in (-13.375, -5], should have low ULP):\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "\n[EXP] Exp-based region tests (x in (-13.375, -5], should have low ULP):\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
     for (const auto& [input_val, max_expected_ulp] : exp_tests) {
         float actual = run_gelu_bw_main_single(*device_, input_val);
         float expected = bf16_ulp_bw_main::gelu_derivative_expected_bf16_daz(input_val);
         int32_t ulp = bf16_ulp_bw_main::ulp_distance_bf16_daz(actual, expected);
 
-        std::cout << "[EXP] x=" << input_val << ": expected=" << expected << ", actual=" << actual << ", ULP=" << ulp
-                  << std::endl;
+        {
+            std::ostringstream oss_;
+            oss_ << "[EXP] x=" << input_val << ": expected=" << expected << ", actual=" << actual << ", ULP=" << ulp;
+            log_debug(tt::LogTest, "{}", oss_.str());
+        }
 
         EXPECT_LE(ulp, max_expected_ulp) << "EXP GELU'(" << input_val << ") exp-based region ULP too high";
     }
@@ -877,14 +1122,22 @@ TEST_F(GeluBwMainPolyTest, DerivativeAtNegativeValues) {
     // Saturation region tests (x <= -13.375) - expect saturation to 0
     std::vector<float> saturation_tests = {-13.375f, -14.0f, -20.0f};
 
-    std::cout << "\n[SAT] Saturation region tests (x <= -13.375, saturates to 0):\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "\n[SAT] Saturation region tests (x <= -13.375, saturates to 0):\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
     for (float input_val : saturation_tests) {
         float actual = run_gelu_bw_main_single(*device_, input_val);
         float expected = bf16_ulp_bw_main::gelu_derivative_expected_bf16_daz(input_val);
         int32_t ulp = bf16_ulp_bw_main::ulp_distance_bf16_daz(actual, expected);
 
-        std::cout << "[SAT] x=" << input_val << ": expected=" << expected << ", actual=" << actual
-                  << " (saturated to 0), ULP=" << ulp << std::endl;
+        {
+            std::ostringstream oss_;
+            oss_ << "[SAT] x=" << input_val << ": expected=" << expected << ", actual=" << actual
+                 << " (saturated to 0), ULP=" << ulp;
+            log_debug(tt::LogTest, "{}", oss_.str());
+        }
 
         // Just verify it returns 0 (saturation)
         EXPECT_EQ(actual, 0.0f) << "SAT GELU'(" << input_val << ") should saturate to 0";
@@ -923,7 +1176,11 @@ TEST_F(GeluBwMainPolyTest, ComprehensiveULPAnalysis) {
     }
 
     const size_t valid_count = input_values.size();
-    std::cout << "\n[POLY] Collected " << valid_count << " valid BF16 values\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "\n[POLY] Collected " << valid_count << " valid BF16 values";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
     // Pad to tile boundary
     const size_t tile_size = tt::constants::TILE_HW;
@@ -1026,26 +1283,62 @@ TEST_F(GeluBwMainPolyTest, ComprehensiveULPAnalysis) {
     }
 
     // Print results
-    std::cout << "\n============================================================\n";
-    std::cout << "POLYNOMIAL GELU BACKWARD ULP ANALYSIS (DAZ+FTZ MODEL)\n";
-    std::cout << "============================================================\n";
-    std::cout << std::setw(30) << "Region" << std::setw(10) << "Count" << std::setw(12) << "Mean ULP" << std::setw(12)
-              << "Max ULP" << std::setw(15) << "Worst x\n";
-    std::cout << std::string(79, '-') << "\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "\n============================================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "POLYNOMIAL GELU BACKWARD ULP ANALYSIS (DAZ+FTZ MODEL)\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "============================================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << std::setw(30) << "Region" << std::setw(10) << "Count" << std::setw(12) << "Mean ULP" << std::setw(12)
+             << "Max ULP" << std::setw(15) << "Worst x";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << std::string(79, '-');
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
     for (const auto& r : regions) {
         if (r.count > 0) {
-            std::cout << std::setw(30) << r.name << std::setw(10) << r.count << std::setw(12) << std::fixed
-                      << std::setprecision(2) << (r.ulp_sum / r.count) << std::setw(12) << r.max_ulp << std::setw(15)
-                      << std::scientific << std::setprecision(3) << r.worst_x << "\n";
+            {
+                std::ostringstream oss_;
+                oss_ << std::setw(30) << r.name << std::setw(10) << r.count << std::setw(12) << std::fixed
+                     << std::setprecision(2) << (r.ulp_sum / r.count) << std::setw(12) << r.max_ulp << std::setw(15)
+                     << std::scientific << std::setprecision(3) << r.worst_x;
+                log_debug(tt::LogTest, "{}", oss_.str());
+            }
         }
     }
 
-    std::cout << std::string(79, '-') << "\n";
-    std::cout << std::setw(30) << "OVERALL" << std::setw(10) << valid_count << std::setw(12) << std::fixed
-              << std::setprecision(2) << (overall_ulp_sum / valid_count) << std::setw(12) << overall_max_ulp
-              << std::setw(15) << std::scientific << std::setprecision(3) << overall_worst_x << "\n";
-    std::cout << "============================================================\n";
+    {
+        std::ostringstream oss_;
+        oss_ << std::string(79, '-');
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << std::setw(30) << "OVERALL" << std::setw(10) << valid_count << std::setw(12) << std::fixed
+             << std::setprecision(2) << (overall_ulp_sum / valid_count) << std::setw(12) << overall_max_ulp
+             << std::setw(15) << std::scientific << std::setprecision(3) << overall_worst_x;
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "============================================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
     // The polynomial implementation achieves excellent accuracy in the core region [-3, 3.5]
     // where most practical values lie. Outside this range, accuracy degrades because:
@@ -1065,16 +1358,44 @@ TEST_F(GeluBwMainPolyTest, ComprehensiveULPAnalysis) {
     // Core region should have Max ULP <= 5 (actually achieves 1)
     EXPECT_LE(core_max_ulp, 2) << "Polynomial GELU backward core region Max ULP should be <= 2";
 
-    std::cout << "\nComparison with standard implementation:\n";
-    std::cout << "  Standard (erfc-based): Max ULP = ~32,460 at x = -3.376e+38\n";
-    std::cout << "  Polynomial (overall):  Max ULP = " << overall_max_ulp << " at x = " << overall_worst_x << "\n";
-    std::cout << "  Polynomial (core):     Max ULP = " << core_max_ulp << " (core region [-2, 2])\n";
-    if (core_max_ulp <= 5) {
-        std::cout << "  CORE REGION IMPROVEMENT: " << std::fixed << std::setprecision(0)
-                  << (32460.0 / std::max(1, core_max_ulp)) << "x better accuracy!\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "\nComparison with standard implementation:\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
     }
-    std::cout << "\nNote: Outside core region [-3, 3.5], polynomial saturates to 0 or 1.\n";
-    std::cout << "      This is acceptable because GELU'(x) is very small (< 0.012) for x < -3.\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "  Standard (erfc-based): Max ULP = ~32,460 at x = -3.376e+38\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "  Polynomial (overall):  Max ULP = " << overall_max_ulp << " at x = " << overall_worst_x;
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "  Polynomial (core):     Max ULP = " << core_max_ulp << " (core region [-2, 2])";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    if (core_max_ulp <= 5) {
+        {
+            std::ostringstream oss_;
+            oss_ << "  CORE REGION IMPROVEMENT: " << std::fixed << std::setprecision(0)
+                 << (32460.0 / std::max(1, core_max_ulp)) << "x better accuracy!";
+            log_debug(tt::LogTest, "{}", oss_.str());
+        }
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "\nNote: Outside core region [-3, 3.5], polynomial saturates to 0 or 1.\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "      This is acceptable because GELU'(x) is very small (< 0.012) for x < -3.\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 }
 
 // Precision guard: per-segment ULP analysis matching the kernel's exact code regions.
@@ -1195,13 +1516,37 @@ TEST_F(GeluBwMainPolyTest, DetailedSegmentAnalysis) {
         }
     }
 
-    std::cout << "\n";
-    std::cout << "================================================================================\n";
-    std::cout << "DETAILED PER-SEGMENT ULP ANALYSIS - GELU BACKWARD IMPLEMENTATION\n";
-    std::cout << "================================================================================\n";
-    std::cout << std::setw(35) << "Segment" << std::setw(10) << "Count" << std::setw(12) << "Mean ULP" << std::setw(12)
-              << "Max ULP" << std::setw(12) << "%<=1 ULP" << std::setw(15) << "Worst x\n";
-    std::cout << std::string(96, '-') << "\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "================================================================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "DETAILED PER-SEGMENT ULP ANALYSIS - GELU BACKWARD IMPLEMENTATION\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "================================================================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << std::setw(35) << "Segment" << std::setw(10) << "Count" << std::setw(12) << "Mean ULP" << std::setw(12)
+             << "Max ULP" << std::setw(12) << "%<=1 ULP" << std::setw(15) << "Worst x";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << std::string(96, '-');
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
     int total_count = 0;
     double total_ulp_sum = 0;
@@ -1210,18 +1555,26 @@ TEST_F(GeluBwMainPolyTest, DetailedSegmentAnalysis) {
 
     for (const auto& seg : segments) {
         if (seg.count == 0) {
-            std::cout << std::setw(35) << seg.name << std::setw(10) << 0 << std::setw(12) << "-" << std::setw(12) << "-"
-                      << std::setw(12) << "-" << std::setw(15) << "-\n";
+            {
+                std::ostringstream oss_;
+                oss_ << std::setw(35) << seg.name << std::setw(10) << 0 << std::setw(12) << "-" << std::setw(12) << "-"
+                     << std::setw(12) << "-" << std::setw(15) << "-";
+                log_debug(tt::LogTest, "{}", oss_.str());
+            }
             continue;
         }
 
         double mean_ulp = seg.ulp_sum / seg.count;
         double pct_le_1 = 100.0 * seg.ulp_le_1 / seg.count;
 
-        std::cout << std::setw(35) << seg.name << std::setw(10) << seg.count << std::setw(12) << std::fixed
-                  << std::setprecision(2) << mean_ulp << std::setw(12) << seg.max_ulp << std::setw(11)
-                  << std::setprecision(1) << pct_le_1 << "%" << std::setw(15) << std::scientific << std::setprecision(3)
-                  << seg.worst_x << "\n";
+        {
+            std::ostringstream oss_;
+            oss_ << std::setw(35) << seg.name << std::setw(10) << seg.count << std::setw(12) << std::fixed
+                 << std::setprecision(2) << mean_ulp << std::setw(12) << seg.max_ulp << std::setw(11)
+                 << std::setprecision(1) << pct_le_1 << "%" << std::setw(15) << std::scientific << std::setprecision(3)
+                 << seg.worst_x;
+            log_debug(tt::LogTest, "{}", oss_.str());
+        }
 
         total_count += seg.count;
         total_ulp_sum += seg.ulp_sum;
@@ -1231,12 +1584,23 @@ TEST_F(GeluBwMainPolyTest, DetailedSegmentAnalysis) {
         }
     }
 
-    std::cout << std::string(96, '-') << "\n";
-    std::cout << std::setw(35) << "TOTAL" << std::setw(10) << total_count << std::setw(12) << std::fixed
-              << std::setprecision(2) << (total_ulp_sum / total_count) << std::setw(12) << overall_max_ulp
-              << std::setw(12) << "-" << std::setw(15) << std::scientific << std::setprecision(3) << overall_worst_x
-              << "\n";
-    std::cout << "================================================================================\n";
+    {
+        std::ostringstream oss_;
+        oss_ << std::string(96, '-');
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << std::setw(35) << "TOTAL" << std::setw(10) << total_count << std::setw(12) << std::fixed
+             << std::setprecision(2) << (total_ulp_sum / total_count) << std::setw(12) << overall_max_ulp
+             << std::setw(12) << "-" << std::setw(15) << std::scientific << std::setprecision(3) << overall_worst_x;
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "================================================================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
     // Per-segment regression guards matching kernel code paths
     // Saturation regions must be exact (0 ULP), polynomial/exp regions allow small error
@@ -1293,9 +1657,21 @@ TEST_F(GeluBwMainPolyTest, ExpBasedRegionFullDump) {
     std::sort(exp_region_values.begin(), exp_region_values.end());
 
     const size_t count = exp_region_values.size();
-    std::cout << "\n================================================================================\n";
-    std::cout << "EXP-BASED REGION FULL DUMP: All " << count << " BF16 values in (-13.375, -9)\n";
-    std::cout << "================================================================================\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "\n================================================================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "EXP-BASED REGION FULL DUMP: All " << count << " BF16 values in (-13.375, -9)";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "================================================================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
     // Pad for tensor
     const size_t tile_size = tt::constants::TILE_HW;
@@ -1326,9 +1702,17 @@ TEST_F(GeluBwMainPolyTest, ExpBasedRegionFullDump) {
     auto output_vec = output_cpu.to_vector<::bfloat16>();
 
     // Print header
-    std::cout << std::setw(8) << "Index" << std::setw(12) << "x" << std::setw(16) << "BF16 bits" << std::setw(18)
-              << "Expected" << std::setw(18) << "Actual" << std::setw(10) << "ULP" << "\n";
-    std::cout << std::string(82, '-') << "\n";
+    {
+        std::ostringstream oss_;
+        oss_ << std::setw(8) << "Index" << std::setw(12) << "x" << std::setw(16) << "BF16 bits" << std::setw(18)
+             << "Expected" << std::setw(18) << "Actual" << std::setw(10) << "ULP";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << std::string(82, '-');
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
     int total_ulp = 0;
     int max_ulp = 0;
@@ -1342,10 +1726,14 @@ TEST_F(GeluBwMainPolyTest, ExpBasedRegionFullDump) {
         float expected = bf16_ulp_bw_main::gelu_derivative_expected_bf16_daz(x);
         int32_t ulp = bf16_ulp_bw_main::ulp_distance_bf16_daz(actual, expected);
 
-        std::cout << std::setw(8) << i << std::setw(12) << std::fixed << std::setprecision(4) << x << "    0x"
-                  << std::hex << std::setw(4) << std::setfill('0') << bits << std::dec << std::setfill(' ')
-                  << std::setw(18) << std::scientific << std::setprecision(6) << expected << std::setw(18) << actual
-                  << std::setw(10) << ulp << "\n";
+        {
+            std::ostringstream oss_;
+            oss_ << std::setw(8) << i << std::setw(12) << std::fixed << std::setprecision(4) << x << "    0x"
+                 << std::hex << std::setw(4) << std::setfill('0') << bits << std::dec << std::setfill(' ')
+                 << std::setw(18) << std::scientific << std::setprecision(6) << expected << std::setw(18) << actual
+                 << std::setw(10) << ulp;
+            log_debug(tt::LogTest, "{}", oss_.str());
+        }
 
         total_ulp += ulp;
         if (ulp > max_ulp) {
@@ -1357,14 +1745,42 @@ TEST_F(GeluBwMainPolyTest, ExpBasedRegionFullDump) {
         }
     }
 
-    std::cout << std::string(82, '-') << "\n";
-    std::cout << "SUMMARY:\n";
-    std::cout << "  Total values: " << count << "\n";
-    std::cout << "  Mean ULP: " << std::fixed << std::setprecision(2) << (double)total_ulp / count << "\n";
-    std::cout << "  Max ULP: " << max_ulp << " at x = " << std::setprecision(4) << worst_x << "\n";
-    std::cout << "  Values with ULP <= 1: " << count_le_1 << " (" << std::setprecision(1)
-              << (100.0 * count_le_1 / count) << "%)\n";
-    std::cout << "================================================================================\n";
+    {
+        std::ostringstream oss_;
+        oss_ << std::string(82, '-');
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "SUMMARY:\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "  Total values: " << count;
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "  Mean ULP: " << std::fixed << std::setprecision(2) << (double)total_ulp / count;
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "  Max ULP: " << max_ulp << " at x = " << std::setprecision(4) << worst_x;
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "  Values with ULP <= 1: " << count_le_1 << " (" << std::setprecision(1) << (100.0 * count_le_1 / count)
+             << "%)";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "================================================================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
     // Regression guard: exp-based region should be very precise
     EXPECT_LE(max_ulp, 2) << "Exp-based region (-13.375, -9) max ULP " << max_ulp << " at x=" << worst_x
@@ -1378,28 +1794,88 @@ TEST_F(GeluBwMainPolyTest, ExpBasedRegionFullDump) {
 // =============================================================================
 
 TEST_F(GeluBwMainPolyTest, DeepNegativeRegionAnalysis) {
-    std::cout << "\n============================================================\n";
-    std::cout << "DEEP NEGATIVE REGION ANALYSIS: Why coverage stops at x = -9\n";
-    std::cout << "============================================================\n";
-    std::cout << "\nFunction values in [-13.375, -9] span 8 orders of magnitude:\n";
-    std::cout << std::setw(10) << "x" << std::setw(20) << "GELU'(x) [fp64]\n";
-    std::cout << std::string(30, '-') << "\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "\n============================================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "DEEP NEGATIVE REGION ANALYSIS: Why coverage stops at x = -9\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "============================================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "\nFunction values in [-13.375, -9] span 8 orders of magnitude:\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << std::setw(10) << "x" << std::setw(20) << "GELU'(x) [fp64]";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << std::string(30, '-');
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
     std::vector<float> test_points = {-9.0f, -10.0f, -11.0f, -12.0f, -13.0f, -13.375f};
     for (float x : test_points) {
         double exact = bf16_ulp_bw_main::gelu_derivative_exact(x);
-        std::cout << std::setw(10) << std::fixed << std::setprecision(3) << x << std::setw(20) << std::scientific
-                  << std::setprecision(6) << exact << "\n";
+        {
+            std::ostringstream oss_;
+            oss_ << std::setw(10) << std::fixed << std::setprecision(3) << x << std::setw(20) << std::scientific
+                 << std::setprecision(6) << exact;
+            log_debug(tt::LogTest, "{}", oss_.str());
+        }
     }
 
-    std::cout << "\nPolynomial coverage is impractical because:\n";
-    std::cout << "  - Coefficients would need to be < 1e-18 for accurate fit\n";
-    std::cout << "  - Float32 Horner evaluation loses precision with such tiny coefficients\n";
-    std::cout << "  - Tested FL3 polynomial (numpy polyfit): Max ULP = 15448 (worse than saturation!)\n";
-    std::cout << "\nCurrent implementation: saturate to 0 for x < -9\n";
-    std::cout << "  - Max ULP at saturation boundary: 8898 (at x = -9.062)\n";
-    std::cout << "  - This is acceptable: values < 9e-18 are irrelevant for ML training\n";
-    std::cout << "============================================================\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "\nPolynomial coverage is impractical because:\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "  - Coefficients would need to be < 1e-18 for accurate fit\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "  - Float32 Horner evaluation loses precision with such tiny coefficients\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "  - Tested FL3 polynomial (numpy polyfit): Max ULP = 15448 (worse than saturation!)\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "\nCurrent implementation: saturate to 0 for x < -9\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "  - Max ULP at saturation boundary: 8898 (at x = -9.062)\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "  - This is acceptable: values < 9e-18 are irrelevant for ML training\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "============================================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
     // Saturation guard: verify all BF16 values below -13.375 produce exactly 0.0
     // These values are in the BF16-natural-zero region where GELU'(x) rounds to 0 in BF16
@@ -1419,7 +1895,11 @@ TEST_F(GeluBwMainPolyTest, DeepNegativeRegionAnalysis) {
     }
 
     const size_t sat_count = saturation_values.size();
-    std::cout << "\nSaturation guard: testing " << sat_count << " BF16 values with x <= -13.375\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "\nSaturation guard: testing " << sat_count << " BF16 values with x <= -13.375";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
     const size_t tile_size = tt::constants::TILE_HW;
     size_t padded_size = ((sat_count + tile_size - 1) / tile_size) * tile_size;
@@ -1453,7 +1933,11 @@ TEST_F(GeluBwMainPolyTest, DeepNegativeRegionAnalysis) {
         if (actual != 0.0f) {
             nonzero_count++;
             if (nonzero_count <= 10) {  // Print first 10 violations
-                std::cout << "  VIOLATION: x=" << saturation_values[i] << " produced " << actual << " (expected 0.0)\n";
+                {
+                    std::ostringstream oss_;
+                    oss_ << "  VIOLATION: x=" << saturation_values[i] << " produced " << actual << " (expected 0.0)";
+                    log_debug(tt::LogTest, "{}", oss_.str());
+                }
             }
         }
     }
@@ -1469,10 +1953,26 @@ TEST_F(GeluBwMainPolyTest, DeepNegativeRegionAnalysis) {
 // =============================================================================
 
 TEST_F(GeluBwMainPolyTest, SaturationThresholdResearch) {
-    std::cout << "\n============================================================\n";
-    std::cout << "GELU DERIVATIVE SATURATION THRESHOLD RESEARCH (DAZ+FTZ)\n";
-    std::cout << "Scanning ENTIRE BF16 range\n";
-    std::cout << "============================================================\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "\n============================================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "GELU DERIVATIVE SATURATION THRESHOLD RESEARCH (DAZ+FTZ)\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "Scanning ENTIRE BF16 range\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "============================================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
     // Scan negative values to find zero saturation threshold
     float last_nonzero_x = 0.0f;
@@ -1481,10 +1981,22 @@ TEST_F(GeluBwMainPolyTest, SaturationThresholdResearch) {
     int count_zero_negative = 0;
     int count_nonzero_negative = 0;
 
-    std::cout << "\n--- Scanning ALL negative values for zero saturation ---\n";
-    std::cout << std::setw(14) << "x" << std::setw(20) << "GELU'(x) [fp64]" << std::setw(18) << "BF16 result"
-              << std::setw(10) << "Status\n";
-    std::cout << std::string(62, '-') << "\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "\n--- Scanning ALL negative values for zero saturation ---\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << std::setw(14) << "x" << std::setw(20) << "GELU'(x) [fp64]" << std::setw(18) << "BF16 result"
+             << std::setw(10) << "Status";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << std::string(62, '-');
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
     // Scan entire negative range: from smallest negative normal to most negative
     bool found_transition = false;
@@ -1508,13 +2020,21 @@ TEST_F(GeluBwMainPolyTest, SaturationThresholdResearch) {
                 first_zero_x = x;
                 found_transition = true;
                 // Print transition region
-                std::cout << std::setw(14) << std::fixed << std::setprecision(4) << last_nonzero_x << std::setw(20)
-                          << std::scientific << std::setprecision(6)
-                          << bf16_ulp_bw_main::gelu_derivative_exact(last_nonzero_x) << std::setw(18)
-                          << last_nonzero_value << std::setw(10) << "LAST NONZERO\n";
-                std::cout << std::setw(14) << std::fixed << std::setprecision(4) << x << std::setw(20)
-                          << std::scientific << std::setprecision(6) << bf16_ulp_bw_main::gelu_derivative_exact(x)
-                          << std::setw(18) << expected << std::setw(10) << "FIRST ZERO\n";
+                {
+                    std::ostringstream oss_;
+                    oss_ << std::setw(14) << std::fixed << std::setprecision(4) << last_nonzero_x << std::setw(20)
+                         << std::scientific << std::setprecision(6)
+                         << bf16_ulp_bw_main::gelu_derivative_exact(last_nonzero_x) << std::setw(18)
+                         << last_nonzero_value << std::setw(10) << "LAST NONZERO";
+                    log_debug(tt::LogTest, "{}", oss_.str());
+                }
+                {
+                    std::ostringstream oss_;
+                    oss_ << std::setw(14) << std::fixed << std::setprecision(4) << x << std::setw(20) << std::scientific
+                         << std::setprecision(6) << bf16_ulp_bw_main::gelu_derivative_exact(x) << std::setw(18)
+                         << expected << std::setw(10) << "FIRST ZERO";
+                    log_debug(tt::LogTest, "{}", oss_.str());
+                }
             }
         } else {
             count_nonzero_negative++;
@@ -1533,11 +2053,27 @@ TEST_F(GeluBwMainPolyTest, SaturationThresholdResearch) {
     int count_gt1 = 0;
     int count_lt1 = 0;
 
-    std::cout << "\n--- Scanning ALL positive values (GELU' has hump > 1) ---\n";
-    std::cout << "GELU'(x) approaches 0.5 at x=0, peaks > 1 around x=1-2, then → 1\n\n";
-    std::cout << std::setw(14) << "x" << std::setw(20) << "GELU'(x) [fp64]" << std::setw(18) << "BF16 result"
-              << std::setw(14) << "Category\n";
-    std::cout << std::string(66, '-') << "\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "\n--- Scanning ALL positive values (GELU' has hump > 1) ---\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "GELU'(x) approaches 0.5 at x=0, peaks > 1 around x=1-2, then → 1\n\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << std::setw(14) << "x" << std::setw(20) << "GELU'(x) [fp64]" << std::setw(18) << "BF16 result"
+             << std::setw(14) << "Category";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << std::string(66, '-');
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
     // Scan entire positive range
     bool found_first_ge1 = false;
@@ -1567,36 +2103,57 @@ TEST_F(GeluBwMainPolyTest, SaturationThresholdResearch) {
                 last_gt1_x = prev_x;
                 final_sat1_x = x;  // Actually this might still be <1 briefly
                 in_gt1_region = false;
-                std::cout << std::setw(14) << std::fixed << std::setprecision(4) << prev_x << std::setw(20)
-                          << std::scientific << std::setprecision(6) << bf16_ulp_bw_main::gelu_derivative_exact(prev_x)
-                          << std::setw(18) << prev_value << std::setw(14) << "LAST >1\n";
-                std::cout << std::setw(14) << std::fixed << std::setprecision(4) << x << std::setw(20)
-                          << std::scientific << std::setprecision(6) << exact << std::setw(18) << expected
-                          << std::setw(14) << "back to <1\n";
+                {
+                    std::ostringstream oss_;
+                    oss_ << std::setw(14) << std::fixed << std::setprecision(4) << prev_x << std::setw(20)
+                         << std::scientific << std::setprecision(6) << bf16_ulp_bw_main::gelu_derivative_exact(prev_x)
+                         << std::setw(18) << prev_value << std::setw(14) << "LAST >1";
+                    log_debug(tt::LogTest, "{}", oss_.str());
+                }
+                {
+                    std::ostringstream oss_;
+                    oss_ << std::setw(14) << std::fixed << std::setprecision(4) << x << std::setw(20) << std::scientific
+                         << std::setprecision(6) << exact << std::setw(18) << expected << std::setw(14) << "back to <1";
+                    log_debug(tt::LogTest, "{}", oss_.str());
+                }
             }
         } else if (expected == 1.0f) {
             count_eq1++;
             if (!found_first_ge1) {
                 found_first_ge1 = true;
                 first_ge1_x = x;
-                std::cout << std::setw(14) << std::fixed << std::setprecision(4) << prev_x << std::setw(20)
-                          << std::scientific << std::setprecision(6) << bf16_ulp_bw_main::gelu_derivative_exact(prev_x)
-                          << std::setw(18) << prev_value << std::setw(14) << "last <1\n";
-                std::cout << std::setw(14) << std::fixed << std::setprecision(4) << x << std::setw(20)
-                          << std::scientific << std::setprecision(6) << exact << std::setw(18) << expected
-                          << std::setw(14) << "FIRST >=1\n";
+                {
+                    std::ostringstream oss_;
+                    oss_ << std::setw(14) << std::fixed << std::setprecision(4) << prev_x << std::setw(20)
+                         << std::scientific << std::setprecision(6) << bf16_ulp_bw_main::gelu_derivative_exact(prev_x)
+                         << std::setw(18) << prev_value << std::setw(14) << "last <1";
+                    log_debug(tt::LogTest, "{}", oss_.str());
+                }
+                {
+                    std::ostringstream oss_;
+                    oss_ << std::setw(14) << std::fixed << std::setprecision(4) << x << std::setw(20) << std::scientific
+                         << std::setprecision(6) << exact << std::setw(18) << expected << std::setw(14) << "FIRST >=1";
+                    log_debug(tt::LogTest, "{}", oss_.str());
+                }
             }
             if (in_gt1_region) {
                 // Transition from >1 to =1 (end of hump)
                 last_gt1_x = prev_x;
                 final_sat1_x = x;
                 in_gt1_region = false;
-                std::cout << std::setw(14) << std::fixed << std::setprecision(4) << prev_x << std::setw(20)
-                          << std::scientific << std::setprecision(6) << bf16_ulp_bw_main::gelu_derivative_exact(prev_x)
-                          << std::setw(18) << prev_value << std::setw(14) << "LAST >1\n";
-                std::cout << std::setw(14) << std::fixed << std::setprecision(4) << x << std::setw(20)
-                          << std::scientific << std::setprecision(6) << exact << std::setw(18) << expected
-                          << std::setw(14) << "FINAL =1\n";
+                {
+                    std::ostringstream oss_;
+                    oss_ << std::setw(14) << std::fixed << std::setprecision(4) << prev_x << std::setw(20)
+                         << std::scientific << std::setprecision(6) << bf16_ulp_bw_main::gelu_derivative_exact(prev_x)
+                         << std::setw(18) << prev_value << std::setw(14) << "LAST >1";
+                    log_debug(tt::LogTest, "{}", oss_.str());
+                }
+                {
+                    std::ostringstream oss_;
+                    oss_ << std::setw(14) << std::fixed << std::setprecision(4) << x << std::setw(20) << std::scientific
+                         << std::setprecision(6) << exact << std::setw(18) << expected << std::setw(14) << "FINAL =1";
+                    log_debug(tt::LogTest, "{}", oss_.str());
+                }
             }
         } else {  // expected > 1.0f
             count_gt1++;
@@ -1604,12 +2161,19 @@ TEST_F(GeluBwMainPolyTest, SaturationThresholdResearch) {
                 found_first_gt1 = true;
                 first_gt1_x = x;
                 in_gt1_region = true;
-                std::cout << std::setw(14) << std::fixed << std::setprecision(4) << prev_x << std::setw(20)
-                          << std::scientific << std::setprecision(6) << bf16_ulp_bw_main::gelu_derivative_exact(prev_x)
-                          << std::setw(18) << prev_value << std::setw(14) << "last <=1\n";
-                std::cout << std::setw(14) << std::fixed << std::setprecision(4) << x << std::setw(20)
-                          << std::scientific << std::setprecision(6) << exact << std::setw(18) << expected
-                          << std::setw(14) << "FIRST >1\n";
+                {
+                    std::ostringstream oss_;
+                    oss_ << std::setw(14) << std::fixed << std::setprecision(4) << prev_x << std::setw(20)
+                         << std::scientific << std::setprecision(6) << bf16_ulp_bw_main::gelu_derivative_exact(prev_x)
+                         << std::setw(18) << prev_value << std::setw(14) << "last <=1";
+                    log_debug(tt::LogTest, "{}", oss_.str());
+                }
+                {
+                    std::ostringstream oss_;
+                    oss_ << std::setw(14) << std::fixed << std::setprecision(4) << x << std::setw(20) << std::scientific
+                         << std::setprecision(6) << exact << std::setw(18) << expected << std::setw(14) << "FIRST >1";
+                    log_debug(tt::LogTest, "{}", oss_.str());
+                }
             }
             in_gt1_region = true;
         }
@@ -1618,40 +2182,140 @@ TEST_F(GeluBwMainPolyTest, SaturationThresholdResearch) {
         prev_value = expected;
     }
 
-    std::cout << "\n============================================================\n";
-    std::cout << "SATURATION THRESHOLD RESULTS\n";
-    std::cout << "============================================================\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "\n============================================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "SATURATION THRESHOLD RESULTS\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "============================================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
-    std::cout << "\nNegative region (saturation to 0):\n";
-    std::cout << "  Last nonzero at x = " << std::fixed << std::setprecision(4) << last_nonzero_x << " (bf16: 0x"
-              << std::hex << bf16_ulp_bw_main::float_to_bf16_bits(last_nonzero_x) << std::dec << ")\n";
-    std::cout << "  First zero at  x = " << std::fixed << std::setprecision(4) << first_zero_x << " (bf16: 0x"
-              << std::hex << bf16_ulp_bw_main::float_to_bf16_bits(first_zero_x) << std::dec << ")\n";
-    std::cout << "  Values with GELU'(x) = 0:  " << count_zero_negative << "\n";
-    std::cout << "  Values with GELU'(x) != 0: " << count_nonzero_negative << "\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "\nNegative region (saturation to 0):\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "  Last nonzero at x = " << std::fixed << std::setprecision(4) << last_nonzero_x << " (bf16: 0x"
+             << std::hex << bf16_ulp_bw_main::float_to_bf16_bits(last_nonzero_x) << std::dec << ")";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "  First zero at  x = " << std::fixed << std::setprecision(4) << first_zero_x << " (bf16: 0x"
+             << std::hex << bf16_ulp_bw_main::float_to_bf16_bits(first_zero_x) << std::dec << ")";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "  Values with GELU'(x) = 0:  " << count_zero_negative;
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "  Values with GELU'(x) != 0: " << count_nonzero_negative;
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
-    std::cout << "\nPositive region (GELU' has hump > 1):\n";
-    std::cout << "  First >=1 at x = " << std::fixed << std::setprecision(4) << first_ge1_x << " (bf16: 0x" << std::hex
-              << bf16_ulp_bw_main::float_to_bf16_bits(first_ge1_x) << std::dec << ")\n";
-    std::cout << "  First >1  at x = " << std::fixed << std::setprecision(4) << first_gt1_x << " (bf16: 0x" << std::hex
-              << bf16_ulp_bw_main::float_to_bf16_bits(first_gt1_x) << std::dec << ")\n";
-    std::cout << "  Last >1   at x = " << std::fixed << std::setprecision(4) << last_gt1_x << " (bf16: 0x" << std::hex
-              << bf16_ulp_bw_main::float_to_bf16_bits(last_gt1_x) << std::dec << ")\n";
-    std::cout << "  Final =1  at x = " << std::fixed << std::setprecision(4) << final_sat1_x << " (bf16: 0x" << std::hex
-              << bf16_ulp_bw_main::float_to_bf16_bits(final_sat1_x) << std::dec << ")\n";
-    std::cout << "  Values with BF16 < 1:  " << count_lt1 << "\n";
-    std::cout << "  Values with BF16 = 1:  " << count_eq1 << "\n";
-    std::cout << "  Values with BF16 > 1:  " << count_gt1 << "\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "\nPositive region (GELU' has hump > 1):\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "  First >=1 at x = " << std::fixed << std::setprecision(4) << first_ge1_x << " (bf16: 0x" << std::hex
+             << bf16_ulp_bw_main::float_to_bf16_bits(first_ge1_x) << std::dec << ")";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "  First >1  at x = " << std::fixed << std::setprecision(4) << first_gt1_x << " (bf16: 0x" << std::hex
+             << bf16_ulp_bw_main::float_to_bf16_bits(first_gt1_x) << std::dec << ")";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "  Last >1   at x = " << std::fixed << std::setprecision(4) << last_gt1_x << " (bf16: 0x" << std::hex
+             << bf16_ulp_bw_main::float_to_bf16_bits(last_gt1_x) << std::dec << ")";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "  Final =1  at x = " << std::fixed << std::setprecision(4) << final_sat1_x << " (bf16: 0x" << std::hex
+             << bf16_ulp_bw_main::float_to_bf16_bits(final_sat1_x) << std::dec << ")";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "  Values with BF16 < 1:  " << count_lt1;
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "  Values with BF16 = 1:  " << count_eq1;
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "  Values with BF16 > 1:  " << count_gt1;
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
-    std::cout << "\n============================================================\n";
-    std::cout << "RECOMMENDATION FOR POLYNOMIAL IMPLEMENTATION\n";
-    std::cout << "============================================================\n";
-    std::cout << "  For x <= " << first_zero_x << ": return 0.0f (zero saturation)\n";
-    std::cout << "  For x >= " << final_sat1_x << ": return 1.0f (one saturation)\n";
-    std::cout << "  For " << first_zero_x << " < x < " << final_sat1_x << ": use polynomial\n";
-    std::cout << "\nNote: GELU'(x) exceeds 1.0 for x in [" << first_gt1_x << ", " << last_gt1_x << "]\n";
-    std::cout << "      Polynomial must reproduce this 'hump' accurately.\n";
-    std::cout << "============================================================\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "\n============================================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "RECOMMENDATION FOR POLYNOMIAL IMPLEMENTATION\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "============================================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "  For x <= " << first_zero_x << ": return 0.0f (zero saturation)";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "  For x >= " << final_sat1_x << ": return 1.0f (one saturation)";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "  For " << first_zero_x << " < x < " << final_sat1_x << ": use polynomial";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "\nNote: GELU'(x) exceeds 1.0 for x in [" << first_gt1_x << ", " << last_gt1_x << "]";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "      Polynomial must reproduce this 'hump' accurately.\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
+    {
+        std::ostringstream oss_;
+        oss_ << "============================================================\n";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
     // =========================================================================
     // Saturation guards: verify device produces exact saturation values
@@ -1677,8 +2341,12 @@ TEST_F(GeluBwMainPolyTest, SaturationThresholdResearch) {
         }
     }
 
-    std::cout << "\nSaturation guard: " << pos_sat_values.size() << " positive + " << neg_sat_values.size()
-              << " negative values\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "\nSaturation guard: " << pos_sat_values.size() << " positive + " << neg_sat_values.size()
+             << " negative values";
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
 
     // Helper lambda to test saturation region
     auto test_saturation = [&](std::vector<float>& values, float expected_val, const std::string& label) {
@@ -1716,8 +2384,12 @@ TEST_F(GeluBwMainPolyTest, SaturationThresholdResearch) {
             if (actual != expected_val) {
                 violations++;
                 if (violations <= 10) {
-                    std::cout << "  " << label << " VIOLATION: x=" << values[i] << " produced " << actual
-                              << " (expected " << expected_val << ")\n";
+                    {
+                        std::ostringstream oss_;
+                        oss_ << "  " << label << " VIOLATION: x=" << values[i] << " produced " << actual
+                             << " (expected " << expected_val << ")";
+                        log_debug(tt::LogTest, "{}", oss_.str());
+                    }
                 }
             }
         }
@@ -1742,20 +2414,32 @@ TEST_F(GeluBwMainPolyTest, SpecialValues) {
     // +inf: treated as large positive, saturates to 1.0
     // (also the correct mathematical limit: lim x->+inf GELU'(x) = 1)
     float result_pos_inf = run_gelu_bw_main_single(*device_, pos_inf);
-    std::cout << "GELU_BW(+inf) = " << result_pos_inf << "\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "GELU_BW(+inf) = " << result_pos_inf;
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
     EXPECT_EQ(result_pos_inf, 1.0f) << "+inf should saturate to 1.0";
 
     // -inf: treated as large negative, falls through to default 0.0
     // (also the correct mathematical limit: lim x->-inf GELU'(x) = 0)
     float result_neg_inf = run_gelu_bw_main_single(*device_, neg_inf);
-    std::cout << "GELU_BW(-inf) = " << result_neg_inf << "\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "GELU_BW(-inf) = " << result_neg_inf;
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
     EXPECT_EQ(result_neg_inf, 0.0f) << "-inf should saturate to 0.0";
 
     // NaN: bit pattern 0x7FFF treated as large positive, saturates to 1.0
     // Ideally should return NaN, but TT hardware treats NaN as ordinary number
     // in comparisons (see special_values.md). This is acceptable per tt-llk#675.
     float result_nan = run_gelu_bw_main_single(*device_, nan_val);
-    std::cout << "GELU_BW(NaN) = " << result_nan << "\n";
+    {
+        std::ostringstream oss_;
+        oss_ << "GELU_BW(NaN) = " << result_nan;
+        log_debug(tt::LogTest, "{}", oss_.str());
+    }
     EXPECT_EQ(result_nan, 1.0f) << "NaN treated as large positive by SFPU, saturates to 1.0";
 }
 
