@@ -2,19 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "gelu_backward_program_factory.hpp"
-#include "gelu_backward_device_operation_types.hpp"
+#include "gelu_bw_program_factory.hpp"
+#include "gelu_bw_device_operation_types.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::experimental::prim {
+namespace ttnn::operations::unary_backward::gelu_bw {
 
 using namespace tt::constants;
 
-GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
-    const GeluBackwardParams& args, const GeluBackwardInputs& tensor_args, Tensor& output) {
+GeluBwProgramFactory::cached_program_t GeluBwProgramFactory::create(
+    const GeluBwParams& /*args*/, const GeluBwInputs& tensor_args, Tensor& output) {
     const auto& input = tensor_args.input;              // src0
     const auto& grad_output = tensor_args.grad_output;  // src1
 
@@ -27,7 +27,6 @@ GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
     tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
-    // NOTE: There is an assumption that number of tiles in grad_output is the same as in input
     uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
 
     tt::tt_metal::IDevice* device = input.device();
@@ -92,17 +91,9 @@ GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
     unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
     unpack_to_dest_mode[src1_cb_index] = UnpackToDestMode::UnpackToDestFp32;
 
-    // Select compute kernel based on approximation mode
-    std::string compute_kernel_path;
-    if (args.approximate == "tanh") {
-        compute_kernel_path =
-            "ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/"
-            "kernels/compute/eltwise_bw_gelu_approx_tanh.cpp";
-    } else {
-        compute_kernel_path =
-            "ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/"
-            "kernels/compute/eltwise_bw_gelu_poly.cpp";
-    }
+    std::string compute_kernel_path =
+        "ttnn/cpp/ttnn/operations/eltwise/unary_backward/gelu_bw/device/"
+        "kernels/compute/eltwise_bw_gelu_poly.cpp";
 
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -139,17 +130,17 @@ GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
         {binary_reader_kernel_id, compute_kernel_id, unary_writer_kernel_id, num_cores, num_cores_y}};
 }
 
-void GeluBackwardProgramFactory::override_runtime_arguments(
+void GeluBwProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const GeluBackwardParams& /*operation_attributes*/,
-    const GeluBackwardInputs& tensor_args,
+    const GeluBwParams& /*operation_attributes*/,
+    const GeluBwInputs& tensor_args,
     Tensor& output) {
     using namespace tt::tt_metal;
 
     auto& shared_vars = cached_program.shared_variables;
-    auto& gelu_bw_reader_kernel_id = shared_vars.gelu_bw_reader_kernel_id;
-    auto& gelu_bw_compute_kernel_id = shared_vars.gelu_bw_compute_kernel_id;
-    auto& gelu_bw_writer_kernel_id = shared_vars.gelu_bw_writer_kernel_id;
+    auto& reader_kernel_id = shared_vars.reader_kernel_id;
+    auto& compute_kernel_id = shared_vars.compute_kernel_id;
+    auto& writer_kernel_id = shared_vars.writer_kernel_id;
     auto& program = cached_program.program;
 
     uint32_t num_cores = shared_vars.num_cores;
@@ -161,10 +152,9 @@ void GeluBackwardProgramFactory::override_runtime_arguments(
     auto* src1_buffer = input.buffer();
     auto* dst_buffer = output.buffer();
 
-    // Only update buffer addresses
-    auto& reader_runtime_args = GetRuntimeArgs(program, gelu_bw_reader_kernel_id);
-    auto& compute_runtime_args = GetRuntimeArgs(program, gelu_bw_compute_kernel_id);
-    auto& writer_runtime_args = GetRuntimeArgs(program, gelu_bw_writer_kernel_id);
+    auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id);
+    auto& compute_runtime_args = GetRuntimeArgs(program, compute_kernel_id);
+    auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
 
     uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
     tt::tt_metal::IDevice* device = input.device();
@@ -184,16 +174,13 @@ void GeluBackwardProgramFactory::override_runtime_arguments(
             TT_ASSERT(false, "Core not in specified core ranges");
         }
 
-        // Update reader args
         reader_runtime_args[core.x][core.y][0] = src0_buffer->address();
         reader_runtime_args[core.x][core.y][1] = src1_buffer->address();
         reader_runtime_args[core.x][core.y][2] = num_tiles_per_core;
         reader_runtime_args[core.x][core.y][3] = num_tiles_written;
 
-        // Update compute args
         compute_runtime_args[core.x][core.y][0] = num_tiles_per_core;
 
-        // Update writer args
         writer_runtime_args[core.x][core.y][0] = dst_buffer->address();
         writer_runtime_args[core.x][core.y][1] = num_tiles_per_core;
         writer_runtime_args[core.x][core.y][2] = num_tiles_written;
@@ -202,4 +189,4 @@ void GeluBackwardProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::experimental::prim
+}  // namespace ttnn::operations::unary_backward::gelu_bw
